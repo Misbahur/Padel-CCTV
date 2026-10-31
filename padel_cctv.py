@@ -1,93 +1,229 @@
 #!/usr/bin/env python3
 """
-Papan Skor Padel + Perekam CCTV
---------------------------------
+Papan Skor Padel + Perekam CCTV — Multi-Lapangan (v2)
+------------------------------------------------------
 Menjalankan papan skor di browser dan merekam stream RTSP dari CCTV
-saat tombol "Main" ditekan. Rekaman berhenti otomatis saat pertandingan
-selesai (ditambah beberapa detik penutup), lalu file diberi nama
-berisi nama tim dan skor akhir.
+untuk 3 lapangan sekaligus. Setiap lapangan punya session, kamera, dan
+konfigurasi sendiri. Dilengkapi sistem login (admin + PIN per lapangan).
 
 Butuh: Python 3.8+ dan ffmpeg (tanpa library Python tambahan).
 Jalankan:  python padel_cctv.py
 Buka:      http://localhost:8080
 """
 import datetime
+import hashlib
 import json
 import os
+import queue
 import re
+import secrets
 import shutil
 import socket
 import subprocess
 import sys
 import threading
 import time
-import queue
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-
-if sys.stdout and hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-if sys.stderr and hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE, "config.json")
-DEFAULTS = {
-    "port": 8080,
-    "output_dir": "rekaman",
+
+COURT_DEFAULT = {
     "post_roll_seconds": 15,
+    "audio": True,
+    "overlay": {
+        "enabled": True, "position": "top-left", "scale": 1.0,
+        "offset_seconds": 0.0, "preset": "veryfast", "crf": 21, "keep_original": True
+    },
+}
+
+GLOBAL_DEFAULTS = {
+    "port": 8080,
     "ffmpeg": "ffmpeg",
     "ffprobe": "ffprobe",
-    "audio": True,
-    "overlay": {"enabled": True, "position": "top-left", "scale": 1.0, "offset_seconds": 0.0,
-                "preset": "veryfast", "crf": 21, "keep_original": True},
-    "cameras": [
-        {"name": "Lapangan 1", "rtsp": "rtsp://admin:password@192.168.1.64:554/Streaming/Channels/101"}
-    ],
 }
 
 
+def _sha256(s):
+    return hashlib.sha256(s.encode()).hexdigest()
+
+
+def find_binary(bin_name):
+    """Cari file executable di folder project, PATH, atau direktori WinGet."""
+    exe_name = bin_name if bin_name.endswith(".exe") else f"{bin_name}.exe"
+    # 1. Folder project
+    for candidate in [os.path.join(BASE, exe_name), os.path.join(BASE, bin_name)]:
+        if os.path.isfile(candidate):
+            return candidate
+    # 2. PATH sistem
+    which_bin = shutil.which(bin_name) or shutil.which(exe_name)
+    if which_bin:
+        return which_bin
+    # 3. WinGet Links
+    local_appdata = os.environ.get("LOCALAPPDATA", "")
+    if local_appdata:
+        winget_link = os.path.join(local_appdata, "Microsoft", "WinGet", "Links", exe_name)
+        if os.path.isfile(winget_link):
+            return winget_link
+        # 4. WinGet Packages
+        packages_dir = os.path.join(local_appdata, "Microsoft", "WinGet", "Packages")
+        if os.path.isdir(packages_dir):
+            for root, _, files in os.walk(packages_dir):
+                if exe_name in files:
+                    return os.path.join(root, exe_name)
+    return bin_name
+
+
 def load_config():
-    cfg = dict(DEFAULTS)
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, encoding="utf-8") as f:
-            cfg.update(json.load(f))
+            cfg = json.load(f)
     else:
+        # Generate fresh config with hashed credentials
+        cfg = {
+            "port": 8080,
+            "ffmpeg": "ffmpeg",
+            "ffprobe": "ffprobe",
+            "auth": {
+                "admin_username": "admin",
+                "admin_password_hash": _sha256("admin123"),
+                "courts": {
+                    "1": {"pin_hash": _sha256("1111"), "name": "Lapangan 1"},
+                    "2": {"pin_hash": _sha256("2222"), "name": "Lapangan 2"},
+                    "3": {"pin_hash": _sha256("3333"), "name": "Lapangan 3"},
+                },
+            },
+            "courts": [
+                {
+                    "id": i,
+                    "name": f"Lapangan {i}",
+                    "output_dir": f"rekaman/lapangan{i}",
+                    **COURT_DEFAULT,
+                    "cameras": [
+                        {"name": "Kamera Utama",
+                         "rtsp": f"rtsp://admin:PASSWORD@192.168.1.{63+i}:554/Streaming/Channels/101"}
+                    ],
+                }
+                for i in range(1, 4)
+            ],
+        }
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(DEFAULTS, f, indent=2)
-        print("config.json dibuat. Isi alamat RTSP kamera Anda, lalu jalankan lagi.")
-    ov = dict(DEFAULTS["overlay"])
-    ov.update(cfg.get("overlay") or {})
-    cfg["overlay"] = ov
-    out = cfg["output_dir"]
-    cfg["output_dir"] = out if os.path.isabs(out) else os.path.join(BASE, out)
-    os.makedirs(cfg["output_dir"], exist_ok=True)
-    fonts = os.path.join(BASE, "fonts")
-    if os.path.isdir(fonts):
-        shutil.copytree(fonts, os.path.join(cfg["output_dir"], "_fonts"), dirs_exist_ok=True)
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+        print("config.json dibuat dengan kredensial default.")
+
+    # Resolve output_dir per court
+    for court_cfg in cfg.get("courts", []):
+        out = court_cfg.get("output_dir", f"rekaman/lapangan{court_cfg.get('id',1)}")
+        court_cfg["output_dir"] = out if os.path.isabs(out) else os.path.join(BASE, out)
+        os.makedirs(court_cfg["output_dir"], exist_ok=True)
+        # Copy fonts
+        fonts = os.path.join(BASE, "fonts")
+        if os.path.isdir(fonts):
+            shutil.copytree(fonts, os.path.join(court_cfg["output_dir"], "_fonts"), dirs_exist_ok=True)
+        # Merge overlay defaults
+        ov = dict(COURT_DEFAULT["overlay"])
+        ov.update(court_cfg.get("overlay") or {})
+        court_cfg["overlay"] = ov
+        court_cfg.setdefault("names", ["Tim A", "Tim B"])
+
+    # Deteksi ffmpeg / ffprobe di folder project, PATH, atau WinGet
+    for key in ["ffmpeg", "ffprobe"]:
+        found = find_binary(cfg.get(key, key))
+        if found and os.path.isfile(found):
+            cfg[key] = found
+            bin_dir = os.path.dirname(found)
+            if bin_dir and bin_dir not in os.environ.get("PATH", ""):
+                os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+
     return cfg
 
 
 CFG = load_config()
-import overlay  # noqa: E402
+import overlay      # noqa: E402
 import cari_kamera  # noqa: E402
 
+# ── Auth session store ───────────────────────────────────────────────────────
+AUTH_SESSIONS = {}   # sid → {role, court_id?, expires}
+_auth_lock = threading.Lock()
 
+
+def _cleanup_sessions():
+    """Hapus session yang sudah expired (lazy)."""
+    now = time.time()
+    with _auth_lock:
+        expired = [sid for sid, s in AUTH_SESSIONS.items() if s["expires"] < now]
+        for sid in expired:
+            del AUTH_SESSIONS[sid]
+
+
+def check_auth(handler, required_role="any", court_id=None):
+    """Return session dict jika valid, None jika tidak."""
+    _cleanup_sessions()
+    cookie_hdr = handler.headers.get("Cookie", "")
+    sid = None
+    for part in cookie_hdr.split(";"):
+        part = part.strip()
+        if part.startswith("sid="):
+            sid = part[4:]
+    if not sid:
+        return None
+    with _auth_lock:
+        sess = AUTH_SESSIONS.get(sid)
+    if not sess:
+        return None
+    if sess["expires"] < time.time():
+        with _auth_lock:
+            AUTH_SESSIONS.pop(sid, None)
+        return None
+    if required_role == "admin" and sess["role"] != "admin":
+        return None
+    if court_id is not None and sess["role"] != "admin" and sess.get("court_id") != court_id:
+        return None
+    return sess
+
+
+def handle_login(data):
+    """Proses login, return dict hasil beserta sid jika sukses."""
+    cfg_auth = CFG.get("auth", {})
+    if data.get("type") == "admin":
+        pw_hash = _sha256(data.get("password", ""))
+        if pw_hash != cfg_auth.get("admin_password_hash", ""):
+            return {"ok": False, "message": "Password salah"}
+        sid = secrets.token_hex(16)
+        with _auth_lock:
+            AUTH_SESSIONS[sid] = {"role": "admin", "expires": time.time() + 43200}
+        return {"ok": True, "role": "admin", "sid": sid}
+    elif data.get("type") == "court":
+        cid = str(data.get("court_id", ""))
+        pin_hash = _sha256(str(data.get("pin", "")))
+        court_auth = cfg_auth.get("courts", {}).get(cid)
+        if not court_auth or pin_hash != court_auth.get("pin_hash", ""):
+            return {"ok": False, "message": "PIN salah"}
+        sid = secrets.token_hex(16)
+        with _auth_lock:
+            AUTH_SESSIONS[sid] = {"role": "court", "court_id": int(cid), "expires": time.time() + 43200}
+        return {"ok": True, "role": "court", "court_id": int(cid), "sid": sid}
+    return {"ok": False, "message": "Tipe login tidak valid"}
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
 def slug(s, n=24):
     s = re.sub(r"[^A-Za-z0-9]+", "-", str(s)).strip("-")
     return s[:n] or "Tim"
 
 
 def mask(url):
-    """Sembunyikan password di log."""
     return re.sub(r"(rtsp://[^:/@]+):[^@]*@", r"\1:***@", url)
 
 
+# ── CameraRecorder ───────────────────────────────────────────────────────────
 class CameraRecorder:
     """Merekam satu kamera. Jika stream putus, otomatis menyambung lagi ke file _partN."""
 
-    def __init__(self, cam):
+    def __init__(self, cam, court_cfg):
         self.name = cam.get("name", "Kamera")
         self.url = cam["rtsp"]
+        self._court_cfg = court_cfg
         self.proc = None
         self.part = 1
         self.active = False
@@ -111,13 +247,13 @@ class CameraRecorder:
     def _spawn(self):
         suffix = f"_part{self.part}" if self.part > 1 else ""
         out = f"{self.base}_{slug(self.name)}{suffix}.mp4"
-        cmd = [CFG["ffmpeg"], "-hide_banner", "-loglevel", "error", "-y",
+        ffmpeg = CFG.get("ffmpeg", "ffmpeg")
+        cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
                "-rtsp_transport", "tcp", "-i", self.url,
                "-map", "0:v:0"]
-        if CFG.get("audio", True):
+        if self._court_cfg.get("audio", True):
             cmd += ["-map", "0:a:0?", "-c:a", "aac", "-b:a", "96k"]
         cmd += ["-c:v", "copy",
-                # MP4 terfragmentasi: file tetap bisa diputar walau listrik/laptop mati mendadak
                 "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
                 "-progress", "pipe:1", "-stats_period", "0.5", "-nostats",
                 "-f", "mp4", out]
@@ -132,7 +268,6 @@ class CameraRecorder:
         threading.Thread(target=self._progress, args=(self.proc, len(self.files) - 1), daemon=True).start()
 
     def _progress(self, proc, i):
-        """Catat jam dinding saat detik ke-0 video, untuk menyelaraskan papan skor."""
         n = 0
         for line in proc.stdout:
             if line.startswith("out_time_us=") and n < 30:
@@ -156,7 +291,6 @@ class CameraRecorder:
                 time.sleep(3)
                 if not self.active:
                     break
-                # buang file kosong dari percobaan yang gagal
                 last = self.files[-1]
                 if not os.path.exists(last) or os.path.getsize(last) < 1024:
                     if os.path.exists(last):
@@ -173,7 +307,7 @@ class CameraRecorder:
     def _last_log_line(self):
         try:
             with open(self.log_path, encoding="utf-8", errors="ignore") as f:
-                lines = [l.strip() for l in f if l.strip()]
+                lines = [ln.strip() for ln in f if ln.strip()]
             return lines[-1][:160] if lines else ""
         except OSError:
             return ""
@@ -192,7 +326,8 @@ class CameraRecorder:
                     p.wait(timeout=5)
                 except Exception:
                     p.kill()
-        return [(f, a) for f, a in zip(self.files, self.anchors) if os.path.exists(f) and os.path.getsize(f) > 1024]
+        return [(f, a) for f, a in zip(self.files, self.anchors)
+                if os.path.exists(f) and os.path.getsize(f) > 1024]
 
     def status(self):
         alive = bool(self.active and self.proc and self.proc.poll() is None)
@@ -200,16 +335,20 @@ class CameraRecorder:
         if self.files and os.path.exists(self.files[-1]):
             size = os.path.getsize(self.files[-1])
         recording = alive and size > 0
-        return {"name": self.name, "recording": recording, "connecting": alive and not recording,
-                "placeholder": "PASSWORD@192.168.1.64" in self.url,
+        return {"name": self.name, "recording": recording,
+                "connecting": alive and not recording,
+                "placeholder": "PASSWORD@" in self.url,
                 "error": self.error,
-                "file": os.path.basename(self.files[-1]) if self.files else "", "mb": round(size / 1e6, 1)}
+                "file": os.path.basename(self.files[-1]) if self.files else "",
+                "mb": round(size / 1e6, 1)}
 
 
+# ── Session ──────────────────────────────────────────────────────────────────
 class Session:
-    def __init__(self):
+    def __init__(self, court_cfg):
+        self._cfg = court_cfg
         self.lock = threading.Lock()
-        self.recorders = [CameraRecorder(c) for c in CFG["cameras"]]
+        self.recorders = [CameraRecorder(c, court_cfg) for c in court_cfg.get("cameras", [])]
         self.recording = False
         self.t0 = 0
         self.base = ""
@@ -217,25 +356,33 @@ class Session:
         self.stop_timer = None
         self.stop_at = 0
         self.recent = []
+        self._render_q = None  # set externally after RenderQueue created
 
     def start(self, info):
         with self.lock:
             if self.recording:
                 return {"ok": True, "already": True}
-            names = info.get("names") or ["Tim A", "Tim B"]
+            names = info.get("names") or self._cfg.get("names") or ["Tim A", "Tim B"]
             stamp = datetime.datetime.now()
-            self.base = os.path.join(CFG["output_dir"],
-                                     f"{stamp:%Y%m%d_%H%M%S}_{slug(names[0])}-vs-{slug(names[1])}")
+            # Buat folder khusus per pertandingan: [YYYY-MM-DD_HH-MM-SS]_[Nama-Tim]
+            folder_name = f"{stamp:%Y-%m-%d_%H-%M-%S}_{slug(names[0])}-vs-{slug(names[1])}"
+            self.match_dir = os.path.join(self._cfg["output_dir"], folder_name)
+            os.makedirs(self.match_dir, exist_ok=True)
+            self.base = os.path.join(
+                self.match_dir,
+                f"{stamp:%Y%m%d_%H%M%S}_{slug(names[0])}-vs-{slug(names[1])}"
+            )
             for r in self.recorders:
                 r.start(self.base)
             self.recording = True
-            self.has_board = False
+            self.has_board = True
             self.t0 = time.time()
             self.events_path = self.base + "_poin.jsonl"
-            self._write_event({"event": "mulai", "names": names, "mode": info.get("mode"),
+            self._write_event({"event": "mulai", "names": names,
+                               "mode": info.get("mode"),
                                "waktu": stamp.isoformat(timespec="seconds")})
-            print(f"● REKAM: {os.path.basename(self.base)}")
-            return {"ok": True}
+            print(f"● REKAM [{self._cfg['name']}]: {folder_name}")
+            return {"ok": True, "folder": folder_name}
 
     def _write_event(self, data):
         if not self.events_path:
@@ -245,12 +392,26 @@ class Session:
         with open(self.events_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(data, ensure_ascii=False) + "\n")
 
+    def set_names(self, names):
+        with self.lock:
+            if names and len(names) >= 2:
+                clean_names = [str(names[0]).strip() or "Tim A", str(names[1]).strip() or "Tim B"]
+                self._cfg["names"] = clean_names
+                _save_court_names(self._cfg["id"], clean_names)
+                if self.recording:
+                    self._write_event({"event": "ganti_nama", "names": clean_names})
+                return {"ok": True, "names": clean_names}
+            return {"ok": False, "message": "Format nama pemain tidak valid"}
+
     def event(self, data):
         with self.lock:
+            if data.get("event") == "ganti_nama" and data.get("names"):
+                return self.set_names(data["names"])
             if self.recording:
                 if data.get("board") and data.get("event") != "papan":
                     self.has_board = True
                 self._write_event(data)
+                return {"ok": True}
         return {"ok": True}
 
     def schedule_stop(self, delay, summary):
@@ -259,7 +420,7 @@ class Session:
                 return {"ok": False}
             self._cancel()
             self._write_event({"event": "selesai", "skor": summary})
-            delay = max(0, float(delay if delay is not None else CFG["post_roll_seconds"]))
+            delay = max(0, float(delay if delay is not None else self._cfg.get("post_roll_seconds", 15)))
             self.stop_at = time.time() + delay
             self.stop_timer = threading.Timer(delay, self.stop, kwargs={"summary": summary})
             self.stop_timer.daemon = True
@@ -301,64 +462,87 @@ class Session:
                     except OSError:
                         pass
                 return f
+
             for f, a in vids:
                 self._write_event({"event": "video", "suffix": f[len(self.base):], "anchor": a})
             final, paths = [], []
             for f, a in vids:
                 nf = moved(f)
                 paths.append(nf)
-                final.append(os.path.basename(nf))
+                # Tampilkan relatif terhadap output_dir agar nama folder pertandingan terlihat jelas
+                rel_name = os.path.relpath(nf, self._cfg["output_dir"]).replace("\\", "/")
+                final.append(rel_name)
             for f in [self.events_path] + [r.log_path for r in self.recorders]:
                 moved(f)
-            if CFG["overlay"].get("enabled") and summary is not None and getattr(self, "has_board", False):
-                for pth in paths:
-                    RENDERS.add(pth)
+            ov = self._cfg.get("overlay", {})
+            if ov.get("enabled", True) and getattr(self, "has_board", False):
+                rq = self._render_q
+                if rq:
+                    for pth in paths:
+                        rq.add(pth)
             self.recent = (final + self.recent)[:8]
             self.events_path = ""
-            print(f"■ SELESAI: {', '.join(final) or 'tidak ada video tersimpan'}")
+            print(f"■ SELESAI [{self._cfg['name']}]: {', '.join(final) or 'tidak ada video tersimpan'}")
             return {"ok": True, "files": final}
 
     def status(self):
-        return {"recording": self.recording, "renders": RENDERS.status(),
-                "elapsed": round(time.time() - self.t0) if self.recording else 0,
-                "stopping_in": max(0, round(self.stop_at - time.time())) if self.stop_at else None,
-                "cameras": [r.status() for r in self.recorders],
-                "recent": self.recent,
-                "post_roll": CFG["post_roll_seconds"],
-                "folder": CFG["output_dir"]}
+        rq = self._render_q
+        return {
+            "court_id": self._cfg["id"],
+            "court_name": self._cfg["name"],
+            "names": self._cfg.get("names", ["Tim A", "Tim B"]),
+            "recording": self.recording,
+            "renders": rq.status() if rq else [],
+            "elapsed": round(time.time() - self.t0) if self.recording else 0,
+            "stopping_in": max(0, round(self.stop_at - time.time())) if self.stop_at else None,
+            "cameras": [r.status() for r in self.recorders],
+            "recent": self.recent,
+            "post_roll": self._cfg.get("post_roll_seconds", 15),
+            "folder": self._cfg["output_dir"],
+        }
 
     def test(self):
         res = []
         probe = CFG.get("ffprobe") or "ffprobe"
-        for c in CFG["cameras"]:
+        for c in self._cfg.get("cameras", []):
             try:
-                out = subprocess.run([probe, "-v", "error", "-rtsp_transport", "tcp", "-select_streams", "v:0",
-                                      "-show_entries", "stream=codec_name,width,height", "-of", "json", c["rtsp"]],
-                                     capture_output=True, text=True, timeout=15)
+                out = subprocess.run(
+                    [probe, "-v", "error", "-rtsp_transport", "tcp",
+                     "-select_streams", "v:0",
+                     "-show_entries", "stream=codec_name,width,height",
+                     "-of", "json", c["rtsp"]],
+                    capture_output=True, text=True, timeout=15)
                 if out.returncode == 0:
                     s = json.loads(out.stdout).get("streams", [{}])[0]
                     res.append({"name": c["name"], "ok": True,
-                                "info": f"{s.get('codec_name', '?')} {s.get('width', '?')}×{s.get('height', '?')}"})
+                                "info": f"{s.get('codec_name','?')} {s.get('width','?')}×{s.get('height','?')}"})
                 else:
-                    res.append({"name": c["name"], "ok": False, "info": (out.stderr.strip().splitlines() or ["gagal"])[-1][:160]})
+                    res.append({"name": c["name"], "ok": False,
+                                "info": (out.stderr.strip().splitlines() or ["gagal"])[-1][:160]})
             except subprocess.TimeoutExpired:
-                res.append({"name": c["name"], "ok": False, "info": "Tidak ada jawaban dari kamera (cek IP dan jaringan)"})
+                res.append({"name": c["name"], "ok": False,
+                            "info": "Tidak ada jawaban dari kamera (cek IP dan jaringan)"})
             except FileNotFoundError:
-                res.append({"name": c["name"], "ok": False, "info": "ffprobe tidak ditemukan. Pasang ffmpeg dulu."})
+                res.append({"name": c["name"], "ok": False,
+                            "info": "ffprobe tidak ditemukan. Pasang ffmpeg dulu."})
         return {"results": res}
 
 
+# ── RenderQueue ──────────────────────────────────────────────────────────────
 class RenderQueue:
     """Membuat video dengan papan skor satu per satu di latar belakang."""
 
-    def __init__(self):
+    def __init__(self, court_cfg):
+        self._court_cfg = court_cfg
         self.q = queue.Queue()
         self.jobs = []
         self.lock = threading.Lock()
         threading.Thread(target=self._run, daemon=True).start()
 
     def add(self, path):
-        job = {"file": os.path.basename(path), "path": path, "state": "antre", "progress": 0, "error": ""}
+        rel_file = os.path.relpath(path, self._court_cfg["output_dir"]).replace("\\", "/")
+        job = {"file": rel_file, "path": path,
+               "state": "antre", "progress": 0, "error": ""}
         with self.lock:
             self.jobs.insert(0, job)
             del self.jobs[8:]
@@ -368,149 +552,486 @@ class RenderQueue:
         while True:
             job = self.q.get()
             job["state"] = "proses"
+            # Build a merged cfg for overlay.render
+            merged = dict(CFG)
+            merged["overlay"] = self._court_cfg.get("overlay", CFG.get("overlay", {}))
+            merged["audio"] = self._court_cfg.get("audio", True)
             try:
-                out = overlay.render(job["path"], CFG, progress=lambda p: job.update(progress=p))
-                job.update(state="selesai", progress=100, out=os.path.basename(out))
-                print(f"▶ Video dengan skor: {os.path.basename(out)}")
-                if not CFG["overlay"].get("keep_original", True):
+                out = overlay.render(job["path"], merged, progress=lambda p: job.update(progress=p))
+                out_rel = os.path.relpath(out, self._court_cfg["output_dir"]).replace("\\", "/")
+                job.update(state="selesai", progress=100, out=out_rel)
+                print(f"▶ Video dengan skor [{self._court_cfg['name']}]: {out_rel}")
+                if not merged["overlay"].get("keep_original", True):
                     os.remove(job["path"])
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 job.update(state="gagal", error=str(e)[:200])
-                print(f"✗ Gagal membuat video skor untuk {job['file']}: {e}")
+                print(f"✗ Gagal membuat video skor [{self._court_cfg['name']}] {job['file']}: {e}")
 
     def status(self):
         with self.lock:
-            return [{k: j.get(k) for k in ("file", "state", "progress", "error", "out")} for j in self.jobs]
+            return [{k: j.get(k) for k in ("file", "state", "progress", "error", "out")}
+                    for j in self.jobs]
 
 
-RENDERS = RenderQueue()
+# ── Inisialisasi multi-lapangan ──────────────────────────────────────────────
+SESSIONS = {}   # court_id (int) → Session
+RENDERS = {}    # court_id (int) → RenderQueue
 
-PLACEHOLDER = "PASSWORD@192.168.1.64"
+for _court_cfg in CFG.get("courts", []):
+    _cid = _court_cfg["id"]
+    SESSIONS[_cid] = Session(_court_cfg)
+    RENDERS[_cid] = RenderQueue(_court_cfg)
+    SESSIONS[_cid]._render_q = RENDERS[_cid]
 
 
-def save_cameras(cams):
-    """Tulis daftar kamera ke config.json tanpa mengubah pengaturan lain."""
+# ── Camera helpers per court ─────────────────────────────────────────────────
+PLACEHOLDER = "PASSWORD@"
+
+
+def _save_cameras(court_id, cams):
+    """Tulis daftar kamera ke config.json untuk satu lapangan."""
     raw = {}
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, encoding="utf-8") as f:
             raw = json.load(f)
-    raw["cameras"] = cams
+    for c in raw.get("courts", []):
+        if c["id"] == court_id:
+            c["cameras"] = cams
+            break
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(raw, f, indent=2, ensure_ascii=False)
-    CFG["cameras"] = cams
+    # Update in-memory
+    for c in CFG.get("courts", []):
+        if c["id"] == court_id:
+            c["cameras"] = cams
 
 
-def add_camera(data):
+def _save_court_names(court_id, names):
+    """Tulis nama tim ke config.json untuk satu lapangan."""
+    raw = {}
+    if os.path.exists(CONFIG_PATH):
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            raw = json.load(f)
+    for c in raw.get("courts", []):
+        if c["id"] == court_id:
+            c["names"] = names
+            break
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(raw, f, indent=2, ensure_ascii=False)
+    for c in CFG.get("courts", []):
+        if c["id"] == court_id:
+            c["names"] = names
+
+
+def add_camera(court_id, data):
+    custom_rtsp = (data.get("rtsp") or "").strip()
+    name = (data.get("name") or "").strip()
+    sess = SESSIONS.get(court_id)
+    if not sess:
+        return {"ok": False, "message": f"Lapangan {court_id} tidak ditemukan"}
+
+    if custom_rtsp:
+        if not custom_rtsp.startswith("rtsp://"):
+            return {"ok": False, "message": "Alamat RTSP harus diawali dengan rtsp://"}
+        name = name or f"Kamera {len(sess.recorders) + 1}"
+        with sess.lock:
+            if sess.recording:
+                return {"ok": False, "message": "Tidak bisa menyimpan kamera saat sedang merekam."}
+            court_cfg_list = CFG.get("courts", [])
+            court_cfg = next((c for c in court_cfg_list if c["id"] == court_id), None)
+            if not court_cfg:
+                return {"ok": False, "message": "Konfigurasi lapangan tidak ditemukan"}
+            cams = [c for c in court_cfg.get("cameras", [])
+                    if PLACEHOLDER not in c.get("rtsp", "") and c.get("name") != name]
+            cams.append({"name": name, "rtsp": custom_rtsp})
+            _save_cameras(court_id, cams)
+            sess.recorders = [CameraRecorder(c, sess._cfg) for c in cams]
+        return {"ok": True, "name": name, "label": "RTSP Manual", "info": "Tersimpan"}
+
     ip = (data.get("ip") or "").strip()
+    port = data.get("port")
     if not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip):
-        return {"ok": False, "message": "Tulis IP kamera, contoh 192.168.1.50"}
-    res = cari_kamera.probe(ip, (data.get("user") or "admin").strip(), data.get("password") or "",
-                            CFG.get("ffprobe") or "ffprobe")
+        return {"ok": False, "message": "Tulis IP kamera, contoh 192.168.1.50 atau masukkan URL RTSP manual"}
+    res = cari_kamera.probe(ip, (data.get("user") or "admin").strip(),
+                            data.get("password") or "",
+                            CFG.get("ffprobe") or "ffprobe",
+                            port=port)
     if not res["ok"]:
         return res
-    name = (data.get("name") or "").strip() or f"Kamera {ip.split('.')[-1]}"
-    with SESSION.lock:
-        if SESSION.recording:
-            return {"ok": False, "message": "Kamera ditemukan, tapi tidak bisa disimpan saat sedang merekam. "
-                                            "Coba lagi setelah pertandingan selesai.", "url": mask(res["url"])}
-        cams = [c for c in CFG["cameras"] if PLACEHOLDER not in c.get("rtsp", "") and c.get("name") != name]
+    name = name or f"Kamera {ip.split('.')[-1]}"
+    with sess.lock:
+        if sess.recording:
+            return {"ok": False, "message": "Kamera ditemukan, tapi tidak bisa disimpan saat sedang merekam."}
+        court_cfg_list = CFG.get("courts", [])
+        court_cfg = next((c for c in court_cfg_list if c["id"] == court_id), None)
+        if not court_cfg:
+            return {"ok": False, "message": "Konfigurasi lapangan tidak ditemukan"}
+        cams = [c for c in court_cfg.get("cameras", [])
+                if PLACEHOLDER not in c.get("rtsp", "") and c.get("name") != name]
         cams.append({"name": name, "rtsp": res["url"]})
-        save_cameras(cams)
-        SESSION.recorders = [CameraRecorder(c) for c in cams]
+        _save_cameras(court_id, cams)
+        sess.recorders = [CameraRecorder(c, sess._cfg) for c in cams]
     return {"ok": True, "name": name, "label": res["label"], "info": res["info"]}
 
 
-def remove_camera(data):
-    with SESSION.lock:
-        if SESSION.recording:
+def remove_camera(court_id, data):
+    sess = SESSIONS.get(court_id)
+    if not sess:
+        return {"ok": False, "message": f"Lapangan {court_id} tidak ditemukan"}
+    with sess.lock:
+        if sess.recording:
             return {"ok": False, "message": "Tidak bisa menghapus kamera saat sedang merekam."}
-        cams = [c for c in CFG["cameras"] if c.get("name") != data.get("name")]
-        save_cameras(cams)
-        SESSION.recorders = [CameraRecorder(c) for c in cams]
+        court_cfg = next((c for c in CFG.get("courts", []) if c["id"] == court_id), None)
+        if not court_cfg:
+            return {"ok": False, "message": "Konfigurasi lapangan tidak ditemukan"}
+        cams = [c for c in court_cfg.get("cameras", []) if c.get("name") != data.get("name")]
+        _save_cameras(court_id, cams)
+        sess.recorders = [CameraRecorder(c, sess._cfg) for c in cams]
     return {"ok": True}
 
 
-REMOTE_LOG_FILE = os.path.join(BASE, "remote_signals.jsonl")
-
-
-def log_remote_signal(data):
-    entry = {
-        "timestamp": datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3],
-        **data
-    }
-    line = json.dumps(entry, ensure_ascii=False)
-    print(f"[REMOTE SIGNAL] {line}")
-    try:
-        with open(REMOTE_LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    except Exception:
-        pass
-    return {"ok": True}
-
-
-def clear_remote_signals():
-    if os.path.exists(REMOTE_LOG_FILE):
-        try:
-            os.remove(REMOTE_LOG_FILE)
-        except Exception:
-            pass
-    return {"ok": True}
-
-
-SESSION = Session()
+# ── HTTP Handler ─────────────────────────────────────────────────────────────
+def _court_id_from_path(path):
+    """Ambil court_id integer dari path /api/court/<n>/... atau None."""
+    m = re.match(r"^/api/court/(\d+)/", path)
+    if m:
+        return int(m.group(1))
+    return None
 
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
-    def _json(self, obj, code=200):
-        body = json.dumps(obj).encode()
+    # ── response helpers ──────────────────────────────────────────────────
+    def _json(self, obj, code=200, extra_headers=None):
+        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        if extra_headers:
+            for k, v in extra_headers.items():
+                self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
+    def _html(self, path, code=200):
+        try:
+            with open(path, "rb") as f:
+                body = f.read()
+            self.send_response(code)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+        except FileNotFoundError:
+            self._json({"error": "File tidak ditemukan"}, 404)
+
+    def _redirect(self, location, code=302):
+        self.send_response(code)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _read_body(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        try:
+            return json.loads(self.rfile.read(n) or b"{}")
+        except ValueError:
+            return {}
+
+    # ── GET ───────────────────────────────────────────────────────────────
     def do_GET(self):
-        if self.path in ("/", "/index.html"):
-            with open(os.path.join(BASE, "web", "index.html"), "rb") as f:
+        path = self.path.split("?")[0]
+        spa_entry = os.path.join(BASE, "web", "index.html")
+        has_spa = os.path.isdir(os.path.join(BASE, "web", "assets")) and os.path.isfile(spa_entry)
+
+        # Root → redirect ke login
+        if path in ("/", "/index.html"):
+            self._redirect("/login")
+            return
+
+        # Login page — boleh diakses siapa saja
+        if path == "/login":
+            if has_spa:
+                self._html(spa_entry)
+            else:
+                self._html(os.path.join(BASE, "web", "login.html"))
+            return
+
+        # Dashboard — butuh auth admin
+        if path == "/dashboard":
+            sess = check_auth(self, required_role="admin")
+            if not sess:
+                self._redirect(f"/login?next=/dashboard")
+                return
+            if has_spa:
+                self._html(spa_entry)
+            else:
+                self._html(os.path.join(BASE, "web", "dashboard.html"))
+            return
+
+        # Court page — butuh auth court atau admin
+        m = re.match(r"^/court/(\d+)$", path)
+        if m:
+            cid = int(m.group(1))
+            sess = check_auth(self, court_id=cid)
+            if not sess:
+                self._redirect(f"/login?next=/court/{cid}")
+                return
+            if has_spa:
+                self._html(spa_entry)
+            else:
+                self._html(os.path.join(BASE, "web", "court.html"))
+            return
+
+        # Static files di /assets/ (Vite build)
+        if path.startswith("/assets/"):
+            fname = path[8:]
+            fpath = os.path.join(BASE, "web", "assets", fname)
+            if ".." in fname or not os.path.isfile(fpath):
+                self._json({"error": "not found"}, 404)
+                return
+            ext = os.path.splitext(fname)[1].lower()
+            ctype = {".js": "application/javascript", ".css": "text/css",
+                     ".png": "image/png", ".jpg": "image/jpeg",
+                     ".svg": "image/svg+xml", ".ico": "image/x-icon",
+                     ".woff": "font/woff", ".woff2": "font/woff2"
+                     }.get(ext, "application/octet-stream")
+            with open(fpath, "rb") as f:
                 body = f.read()
             self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
-        elif self.path == "/api/status":
-            self._json(SESSION.status())
-        else:
-            self._json({"error": "not found"}, 404)
+            return
 
+        # Static files di /web/
+        if path.startswith("/web/"):
+            fname = path[5:]  # strip /web/
+            fpath = os.path.join(BASE, "web", fname)
+            # Keamanan: jangan keluar dari folder web
+            if ".." in fname or not os.path.isfile(fpath):
+                self._json({"error": "not found"}, 404)
+                return
+            ext = os.path.splitext(fname)[1].lower()
+            ctype = {".js": "application/javascript", ".css": "text/css",
+                     ".png": "image/png", ".jpg": "image/jpeg",
+                     ".svg": "image/svg+xml", ".ico": "image/x-icon"
+                     }.get(ext, "application/octet-stream")
+            with open(fpath, "rb") as f:
+                body = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        # API: /api/auth/me
+        if path == "/api/auth/me":
+            sess = check_auth(self)
+            if not sess:
+                self._json({"ok": False, "message": "Belum login"}, 401)
+            else:
+                info = {"ok": True, "role": sess["role"]}
+                if "court_id" in sess:
+                    info["court_id"] = sess["court_id"]
+                self._json(info)
+            return
+
+        # API: /api/court/<n>/status
+        m = re.match(r"^/api/court/(\d+)/status$", path)
+        if m:
+            cid = int(m.group(1))
+            sess = check_auth(self, court_id=cid)
+            if not sess:
+                self._json({"error": "unauthorized"}, 401)
+                return
+            s = SESSIONS.get(cid)
+            if not s:
+                self._json({"error": "Lapangan tidak ditemukan"}, 404)
+                return
+            self._json(s.status())
+            return
+
+        # API: /api/admin/status
+        if path == "/api/admin/status":
+            sess = check_auth(self, required_role="admin")
+            if not sess:
+                self._json({"error": "unauthorized"}, 401)
+                return
+            all_status = {cid: s.status() for cid, s in SESSIONS.items()}
+            self._json({"ok": True, "courts": all_status})
+            return
+
+        # API: /api/admin/config
+        if path == "/api/admin/config":
+            sess = check_auth(self, required_role="admin")
+            if not sess:
+                self._json({"error": "unauthorized"}, 401)
+                return
+            # Kembalikan config tanpa hash password
+            safe_cfg = dict(CFG)
+            safe_auth = dict(safe_cfg.get("auth", {}))
+            safe_auth.pop("admin_password_hash", None)
+            safe_courts = {}
+            for cid, cv in safe_auth.get("courts", {}).items():
+                safe_courts[cid] = {k: v for k, v in cv.items() if k != "pin_hash"}
+            safe_auth["courts"] = safe_courts
+            safe_cfg["auth"] = safe_auth
+            self._json({"ok": True, "config": safe_cfg})
+            return
+
+        self._json({"error": "not found"}, 404)
+
+    # ── POST ──────────────────────────────────────────────────────────────
     def do_POST(self):
-        n = int(self.headers.get("Content-Length") or 0)
-        try:
-            data = json.loads(self.rfile.read(n) or b"{}")
-        except ValueError:
-            data = {}
-        routes = {
-            "/api/start": lambda: SESSION.start(data),
-            "/api/event": lambda: SESSION.event(data),
-            "/api/stop": lambda: (SESSION.schedule_stop(data.get("delay"), data.get("summary"))
-                                  if data.get("delay") is not None or data.get("auto")
-                                  else SESSION.stop(data.get("summary"))),
-            "/api/cancel-stop": SESSION.cancel_stop,
-            "/api/test": SESSION.test,
-            "/api/discover": lambda: {"cameras": cari_kamera.discover()},
-            "/api/add-camera": lambda: add_camera(data),
-            "/api/remove-camera": lambda: remove_camera(data),
-            "/api/log-key": lambda: log_remote_signal(data),
-            "/api/clear-log-key": clear_remote_signals,
-        }
-        fn = routes.get(self.path)
-        self._json(fn() if fn else {"error": "not found"}, 200 if fn else 404)
+        path = self.path.split("?")[0]
+        data = self._read_body()
+
+        # Auth routes
+        if path == "/api/auth/login":
+            result = handle_login(data)
+            sid = result.pop("sid", None)
+            headers = {}
+            if sid:
+                headers["Set-Cookie"] = f"sid={sid}; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200"
+            self._json(result, extra_headers=headers if headers else None)
+            return
+
+        if path == "/api/auth/logout":
+            cookie_hdr = self.headers.get("Cookie", "")
+            for part in cookie_hdr.split(";"):
+                part = part.strip()
+                if part.startswith("sid="):
+                    sid = part[4:]
+                    with _auth_lock:
+                        AUTH_SESSIONS.pop(sid, None)
+            self._json({"ok": True},
+                       extra_headers={"Set-Cookie": "sid=; Path=/; HttpOnly; Max-Age=0"})
+            return
+
+        # Court API routes
+        m = re.match(r"^/api/court/(\d+)/(.+)$", path)
+        if m:
+            cid = int(m.group(1))
+            action = m.group(2)
+            sess = check_auth(self, court_id=cid)
+            if not sess:
+                self._json({"error": "unauthorized"}, 401)
+                return
+            s = SESSIONS.get(cid)
+            if not s:
+                self._json({"error": "Lapangan tidak ditemukan"}, 404)
+                return
+
+            if action == "start":
+                self._json(s.start(data))
+            elif action == "set-names":
+                self._json(s.set_names(data.get("names", [])))
+            elif action == "event":
+                self._json(s.event(data))
+            elif action == "stop":
+                if data.get("delay") is not None or data.get("auto"):
+                    self._json(s.schedule_stop(data.get("delay"), data.get("summary")))
+                else:
+                    self._json(s.stop(data.get("summary")))
+            elif action == "cancel-stop":
+                self._json(s.cancel_stop())
+            elif action == "test":
+                self._json(s.test())
+            elif action == "discover":
+                self._json({"cameras": cari_kamera.discover()})
+            elif action == "add-camera":
+                self._json(add_camera(cid, data))
+            elif action == "remove-camera":
+                self._json(remove_camera(cid, data))
+            else:
+                self._json({"error": "not found"}, 404)
+            return
+
+        # Admin API routes
+        if path == "/api/admin/config":
+            sess = check_auth(self, required_role="admin")
+            if not sess:
+                self._json({"error": "unauthorized"}, 401)
+                return
+            # Update config (nama lapangan, overlay settings)
+            try:
+                raw = {}
+                if os.path.exists(CONFIG_PATH):
+                    with open(CONFIG_PATH, encoding="utf-8") as f:
+                        raw = json.load(f)
+                if "courts" in data:
+                    for upd in data["courts"]:
+                        cid = upd.get("id")
+                        for c in raw.get("courts", []):
+                            if c["id"] == cid:
+                                if "name" in upd:
+                                    c["name"] = upd["name"]
+                                    # update auth name too
+                                    raw.get("auth", {}).get("courts", {}).get(str(cid), {})["name"] = upd["name"]
+                                if "overlay" in upd:
+                                    c["overlay"].update(upd["overlay"])
+                                # Update in-memory
+                                for cc in CFG.get("courts", []):
+                                    if cc["id"] == cid:
+                                        if "name" in upd:
+                                            cc["name"] = upd["name"]
+                                        if "overlay" in upd:
+                                            cc["overlay"].update(upd["overlay"])
+                with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                    json.dump(raw, f, indent=2, ensure_ascii=False)
+                self._json({"ok": True})
+            except Exception as e:
+                self._json({"ok": False, "message": str(e)}, 500)
+            return
+
+        if path == "/api/admin/change-password":
+            sess = check_auth(self, required_role="admin")
+            if not sess:
+                self._json({"error": "unauthorized"}, 401)
+                return
+            try:
+                raw = {}
+                if os.path.exists(CONFIG_PATH):
+                    with open(CONFIG_PATH, encoding="utf-8") as f:
+                        raw = json.load(f)
+                if data.get("type") == "admin":
+                    new_pw = data.get("new_password", "")
+                    if len(new_pw) < 6:
+                        self._json({"ok": False, "message": "Password minimal 6 karakter"})
+                        return
+                    new_hash = _sha256(new_pw)
+                    raw.setdefault("auth", {})["admin_password_hash"] = new_hash
+                    CFG.setdefault("auth", {})["admin_password_hash"] = new_hash
+                elif data.get("type") == "court":
+                    cid = str(data.get("court_id", ""))
+                    new_pin = str(data.get("new_pin", ""))
+                    if not re.match(r"^\d{4}$", new_pin):
+                        self._json({"ok": False, "message": "PIN harus 4 digit angka"})
+                        return
+                    new_hash = _sha256(new_pin)
+                    raw.setdefault("auth", {}).setdefault("courts", {}).setdefault(cid, {})["pin_hash"] = new_hash
+                    CFG.setdefault("auth", {}).setdefault("courts", {}).setdefault(cid, {})["pin_hash"] = new_hash
+                else:
+                    self._json({"ok": False, "message": "Tipe tidak valid"})
+                    return
+                with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                    json.dump(raw, f, indent=2, ensure_ascii=False)
+                self._json({"ok": True})
+            except Exception as e:
+                self._json({"ok": False, "message": str(e)}, 500)
+            return
+
+        self._json({"error": "not found"}, 404)
 
 
+# ── Utils ────────────────────────────────────────────────────────────────────
 def local_ips():
     ips = set()
     try:
@@ -523,33 +1044,47 @@ def local_ips():
     return sorted(ips)
 
 
+# ── Main ─────────────────────────────────────────────────────────────────────
 def main():
     if len(sys.argv) > 2 and sys.argv[1] == "--render":
         # python padel_cctv.py --render video.mp4 [--offset 1.5]
+        # Gunakan overlay setting dari court 1 sebagai default
+        render_cfg = dict(CFG)
+        court_cfgs = CFG.get("courts", [])
+        if court_cfgs:
+            render_cfg["overlay"] = court_cfgs[0].get("overlay", CFG.get("overlay", {}))
         if "--offset" in sys.argv:
-            CFG["overlay"]["offset_seconds"] = float(sys.argv[sys.argv.index("--offset") + 1])
-        out = overlay.render(sys.argv[2], CFG, progress=lambda p: print(f"\r  {p}%", end="", flush=True))
+            render_cfg["overlay"]["offset_seconds"] = float(sys.argv[sys.argv.index("--offset") + 1])
+        out = overlay.render(sys.argv[2], render_cfg, progress=lambda p: print(f"\r  {p}%", end="", flush=True))
         print(f"\nSelesai: {out}")
         return
-    if not shutil.which(CFG["ffmpeg"]) and not os.path.exists(CFG["ffmpeg"]):
+
+    ffmpeg_bin = CFG.get("ffmpeg", "ffmpeg")
+    if not shutil.which(ffmpeg_bin) and not os.path.exists(ffmpeg_bin):
         print("PERINGATAN: ffmpeg tidak ditemukan. Papan skor tetap jalan, tapi rekaman tidak bisa dibuat.")
         print("Windows: buka Command Prompt lalu ketik  winget install ffmpeg")
-    port = int(CFG["port"])
+
+    port = int(CFG.get("port", 8080))
     srv = ThreadingHTTPServer(("0.0.0.0", port), Handler)
-    print("=" * 52)
-    print(" Papan Skor Padel + CCTV")
-    print(f" Buka di laptop ini : http://localhost:{port}")
+    print("=" * 60)
+    print(" Papan Skor Padel + CCTV — Multi-Lapangan")
+    print(f" Login Admin  : http://localhost:{port}/login")
+    print(f" Dashboard    : http://localhost:{port}/dashboard")
+    for i in range(1, 4):
+        print(f" Lapangan {i}   : http://localhost:{port}/court/{i}")
     for ip in local_ips():
-        print(f" Dari tablet/HP     : http://{ip}:{port}")
-    print(f" Kamera             : {', '.join(c['name'] for c in CFG['cameras'])}")
-    print(f" Folder rekaman     : {CFG['output_dir']}")
+        print(f" Dari jaringan: http://{ip}:{port}")
     print(" Tekan Ctrl+C untuk berhenti.")
-    print("=" * 52)
+    print("=" * 60)
+    print(" Default login: admin / admin123")
+    print(" PIN Lapangan 1: 1111 | Lapangan 2: 2222 | Lapangan 3: 3333")
+    print("=" * 60)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         print("\nMenutup… rekaman yang sedang berjalan disimpan dulu.")
-        SESSION.stop("dihentikan")
+        for s in SESSIONS.values():
+            s.stop("dihentikan")
         srv.server_close()
 
 

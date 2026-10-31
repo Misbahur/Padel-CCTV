@@ -267,9 +267,12 @@ def render(video, cfg, progress=None):
     out = base + "_skor.mp4"
     folder = os.path.dirname(os.path.abspath(video))
     fonts = os.path.join(folder, "_fonts")
+    parent_fonts = os.path.join(os.path.dirname(folder), "_fonts")
     vf = "ass=%s" % os.path.basename(ass_path)
     if os.path.isdir(fonts):
         vf += ":fontsdir=_fonts"
+    elif os.path.isdir(parent_fonts):
+        vf += ":fontsdir=../_fonts"
     cmd = [cfg.get("ffmpeg", "ffmpeg"), "-hide_banner", "-loglevel", "error", "-y",
            "-i", os.path.basename(video), "-vf", vf,
            "-c:v", "libx264", "-preset", ocfg.get("preset", "veryfast"), "-crf", str(ocfg.get("crf", 21)),

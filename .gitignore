@@ -1,23 +1,18 @@
-# Rekaman CCTV dan video/log hasil pertandingan
-rekaman/
-
-# File konfigurasi lokal berisi kredensial kamera (gunakan config.example.json)
-config.json
-
-# File log debug & sinyal remote
-remote_signals.jsonl
-*.log
-
-# Python cache & temporary files
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
-*.tmp
 *.tmp.mp4
 
-# Editor & OS files
-.vscode/
-.idea/
+# Node & Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# Recordings (Media files & raw footage)
+rekaman/
+
+# OS & Temp
 .DS_Store
 Thumbs.db
-Desktop.ini
+scratch/

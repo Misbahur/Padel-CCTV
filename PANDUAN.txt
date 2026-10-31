@@ -113,12 +113,11 @@ alamatnya muncul di jendela hitam saat program jalan, contoh
 http://192.168.1.20:8080. Sambungkan remote Bluetooth ke perangkat
 yang menampilkan papan skor.
 
-Tombol remote bawaan (misal MIXIO RB-04 / RB-02):
-  Main          : Tombol Kamera (📷) / Enter / Spasi
-  Tim A         : Panah Kiri (<)
-  Tim B         : Panah Kanan (>)
-  Ganti Servis  : Panah Atas (⌃)
-  Batalkan Poin : Tombol Hati (🤍) / Panah Bawah (⌄)
+Tombol remote bawaan:
+  Main      : Enter / Spasi / M
+  Tim A     : panah kiri/atas, Page Up, Volume +
+  Tim B     : panah kanan/bawah, Page Down, Volume -
+  Batalkan  : Backspace / Z, atau tekan lama tombol tim
 Gunakan "Atur tombol remote" untuk memasang tombol remote Anda sendiri.
 
 REMOTE TIKTOK / MULTI-FUNCTION (mis. MIXIO RB-02)

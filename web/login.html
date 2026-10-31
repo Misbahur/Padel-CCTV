@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Login — Padel CCTV</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap">
+<style>
+:root{
+  --bg:#e9efee; --surface:#ffffff; --fg:#13201e; --muted:#5a6b68; --line:#d3dcda;
+  --accent:#1d6a8f; --accent-fg:#ffffff; --court:#cfdde3;
+  --b-bg:#0b2742; --b-fg:#eaf2f8; --ball:#dcef3f;
+  --f-board:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
+  --f-ui:"Barlow",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --danger:#c0473a; --ok:#2a9d5a;
+}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0d1416; --surface:#151f22; --fg:#e4ecec; --muted:#93a4a6;
+  --line:#263336; --accent:#5fb4dc; --accent-fg:#06202c; --court:#12232b; color-scheme:dark}}
+*,*::before,*::after{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font-family:var(--f-ui);font-size:15px;line-height:1.5;
+  display:flex;align-items:center;justify-content:center;min-height:100vh;
+  padding:16px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+
+/* Card */
+.card{background:var(--surface);border:1px solid var(--line);border-radius:16px;
+  width:100%;max-width:420px;padding:32px 28px;display:flex;flex-direction:column;gap:24px;
+  box-shadow:0 8px 32px rgba(0,0,0,.1)}
+.brand{text-align:center}
+.brand .icon{font-size:48px;line-height:1;display:block;margin-bottom:8px}
+.brand h1{font-family:var(--f-board);font-size:28px;font-weight:700;letter-spacing:.04em;margin:0}
+.brand p{margin:4px 0 0;color:var(--muted);font-size:14px}
+
+/* Tabs */
+.tabs{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.tabs button{background:var(--bg);border:none;padding:11px;font:600 14px var(--f-ui);color:var(--muted);cursor:pointer;transition:all .15s}
+.tabs button.active{background:var(--accent);color:var(--accent-fg)}
+.tabs button:hover:not(.active){color:var(--fg)}
+
+/* Form */
+.form{display:flex;flex-direction:column;gap:14px}
+label{display:flex;flex-direction:column;gap:5px;font-size:13px;color:var(--muted);font-weight:500}
+input,select{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);
+  border-radius:8px;padding:10px 12px;width:100%;transition:border-color .15s}
+input:focus,select:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}
+button.submit{background:var(--accent);color:var(--accent-fg);border:none;border-radius:10px;
+  padding:13px;font:700 17px var(--f-board);letter-spacing:.05em;cursor:pointer;width:100%;
+  transition:opacity .15s}
+button.submit:hover{opacity:.88}
+button.submit:disabled{opacity:.5;cursor:not-allowed}
+
+/* Court selector */
+.court-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.court-btn{background:var(--bg);border:2px solid var(--line);border-radius:12px;
+  padding:18px 8px;font:700 15px var(--f-board);letter-spacing:.04em;color:var(--fg);
+  cursor:pointer;text-align:center;transition:all .15s;line-height:1.3}
+.court-btn .num{font-size:32px;display:block;color:var(--accent)}
+.court-btn:hover{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,var(--surface))}
+.court-btn.selected{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,var(--surface))}
+
+/* PIN numpad */
+.pin-section{display:flex;flex-direction:column;gap:12px}
+.pin-display{display:flex;justify-content:center;gap:10px;margin:4px 0}
+.pin-dot{width:16px;height:16px;border-radius:50%;border:2px solid var(--line);background:var(--bg);transition:all .2s}
+.pin-dot.filled{background:var(--accent);border-color:var(--accent)}
+.numpad{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.numpad button{background:var(--bg);border:1px solid var(--line);border-radius:10px;
+  padding:14px 8px;font:600 22px var(--f-board);color:var(--fg);cursor:pointer;transition:all .12s;
+  min-height:54px}
+.numpad button:hover{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,var(--bg))}
+.numpad button:active{transform:scale(.94)}
+.numpad button.del{font-size:18px;color:var(--muted)}
+.numpad button.enter{background:var(--accent);color:var(--accent-fg);border-color:transparent;font-size:16px}
+.numpad button.enter:disabled{opacity:.4;cursor:not-allowed}
+
+/* Alert */
+.alert{border-radius:8px;padding:10px 14px;font-size:14px;display:flex;gap:8px;align-items:flex-start}
+.alert.err{background:color-mix(in srgb,var(--danger) 12%,var(--surface));border:1px solid color-mix(in srgb,var(--danger) 40%,transparent);color:var(--danger)}
+.alert.ok{background:color-mix(in srgb,var(--ok) 12%,var(--surface));border:1px solid color-mix(in srgb,var(--ok) 40%,transparent);color:var(--ok)}
+
+@media(max-width:380px){.card{padding:24px 16px}.numpad button{padding:12px 4px;font-size:20px}}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="brand">
+    <span class="icon">🎾</span>
+    <h1>Padel CCTV</h1>
+    <p>Sistem Papan Skor &amp; Rekaman Multi-Lapangan</p>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <button id="tabAdmin" class="active" onclick="showTab('admin')">👤 Admin</button>
+    <button id="tabCourt" onclick="showTab('court')">🏟 Operator Lapangan</button>
+  </div>
+
+  <!-- Alert -->
+  <div class="alert err" id="alertBox" hidden></div>
+
+  <!-- Admin Form -->
+  <form id="adminForm" class="form" onsubmit="doAdminLogin(event)">
+    <label>Username
+      <input type="text" value="admin" readonly style="color:var(--muted)">
+    </label>
+    <label>Password
+      <input type="password" id="adminPass" placeholder="Masukkan password" autocomplete="current-password" required>
+    </label>
+    <button type="submit" class="submit" id="adminBtn">Masuk sebagai Admin</button>
+  </form>
+
+  <!-- Court Form -->
+  <div id="courtForm" class="form" hidden>
+    <p style="margin:0;font-size:14px;color:var(--muted);font-weight:500">Pilih lapangan:</p>
+    <div class="court-grid">
+      <button class="court-btn" onclick="selectCourt(1)" id="courtBtn1">
+        <span class="num">1</span>Lapangan 1
+      </button>
+      <button class="court-btn" onclick="selectCourt(2)" id="courtBtn2">
+        <span class="num">2</span>Lapangan 2
+      </button>
+      <button class="court-btn" onclick="selectCourt(3)" id="courtBtn3">
+        <span class="num">3</span>Lapangan 3
+      </button>
+    </div>
+
+    <div class="pin-section" id="pinSection" hidden>
+      <p style="margin:0;text-align:center;font-size:14px;color:var(--muted)">Masukkan PIN 4 digit untuk <strong id="selectedCourtName"></strong>:</p>
+      <div class="pin-display">
+        <div class="pin-dot" id="d0"></div>
+        <div class="pin-dot" id="d1"></div>
+        <div class="pin-dot" id="d2"></div>
+        <div class="pin-dot" id="d3"></div>
+      </div>
+      <div class="numpad">
+        <button type="button" onclick="numpadPress('1')">1</button>
+        <button type="button" onclick="numpadPress('2')">2</button>
+        <button type="button" onclick="numpadPress('3')">3</button>
+        <button type="button" onclick="numpadPress('4')">4</button>
+        <button type="button" onclick="numpadPress('5')">5</button>
+        <button type="button" onclick="numpadPress('6')">6</button>
+        <button type="button" onclick="numpadPress('7')">7</button>
+        <button type="button" onclick="numpadPress('8')">8</button>
+        <button type="button" onclick="numpadPress('9')">9</button>
+        <button type="button" class="del" onclick="numpadDel()">⌫</button>
+        <button type="button" onclick="numpadPress('0')">0</button>
+        <button type="button" class="enter" id="pinEnter" onclick="doCourtLogin()" disabled>✓</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+// Baca ?next= dari URL
+const params = new URLSearchParams(location.search);
+const nextUrl = params.get('next') || null;
+
+let activeTab = 'admin';
+let selectedCourt = null;
+let pin = '';
+
+function showTab(tab) {
+  activeTab = tab;
+  $('tabAdmin').classList.toggle('active', tab === 'admin');
+  $('tabCourt').classList.toggle('active', tab === 'court');
+  $('adminForm').hidden = tab !== 'admin';
+  $('courtForm').hidden = tab !== 'court';
+  hideAlert();
+}
+
+function showAlert(msg, type='err') {
+  const b = $('alertBox');
+  b.hidden = false;
+  b.className = 'alert ' + type;
+  b.textContent = msg;
+}
+
+function hideAlert() {
+  $('alertBox').hidden = true;
+}
+
+function selectCourt(n) {
+  selectedCourt = n;
+  pin = '';
+  updatePinDisplay();
+  [1,2,3].forEach(i => $('courtBtn'+i).classList.toggle('selected', i===n));
+  $('pinSection').hidden = false;
+  const names = {1:'Lapangan 1', 2:'Lapangan 2', 3:'Lapangan 3'};
+  $('selectedCourtName').textContent = names[n] || 'Lapangan '+n;
+  $('pinEnter').disabled = true;
+  hideAlert();
+}
+
+function numpadPress(d) {
+  if (pin.length >= 4) return;
+  pin += d;
+  updatePinDisplay();
+  if (pin.length === 4) $('pinEnter').disabled = false;
+}
+
+function numpadDel() {
+  pin = pin.slice(0, -1);
+  updatePinDisplay();
+  $('pinEnter').disabled = pin.length < 4;
+}
+
+function updatePinDisplay() {
+  for (let i = 0; i < 4; i++) {
+    $('d' + i).classList.toggle('filled', i < pin.length);
+  }
+}
+
+// Support keyboard numpad & keyboard shortcuts
+document.addEventListener('keydown', e => {
+  if (activeTab !== 'court' || !selectedCourt) return;
+  const el = document.activeElement;
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
+  if (e.key >= '0' && e.key <= '9') { numpadPress(e.key); e.preventDefault(); }
+  else if (e.key === 'Backspace' || e.key === 'Delete') { numpadDel(); e.preventDefault(); }
+  else if (e.key === 'Enter' && pin.length === 4) { doCourtLogin(); e.preventDefault(); }
+});
+
+async function doAdminLogin(e) {
+  e.preventDefault();
+  hideAlert();
+  const btn = $('adminBtn');
+  btn.disabled = true;
+  btn.textContent = 'Masuk…';
+  try {
+    const r = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({type: 'admin', password: $('adminPass').value})
+    });
+    const d = await r.json();
+    if (d.ok) {
+      window.location.href = nextUrl || '/dashboard';
+    } else {
+      showAlert(d.message || 'Login gagal');
+      btn.disabled = false;
+      btn.textContent = 'Masuk sebagai Admin';
+      $('adminPass').focus();
+    }
+  } catch {
+    showAlert('Tidak bisa terhubung ke server.');
+    btn.disabled = false;
+    btn.textContent = 'Masuk sebagai Admin';
+  }
+}
+
+async function doCourtLogin() {
+  if (!selectedCourt || pin.length !== 4) return;
+  hideAlert();
+  $('pinEnter').disabled = true;
+  const origText = $('pinEnter').textContent;
+  $('pinEnter').textContent = '…';
+  try {
+    const r = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({type: 'court', court_id: selectedCourt, pin})
+    });
+    const d = await r.json();
+    if (d.ok) {
+      const dest = nextUrl || `/court/${d.court_id}`;
+      window.location.href = dest;
+    } else {
+      showAlert(d.message || 'PIN salah');
+      pin = '';
+      updatePinDisplay();
+      $('pinEnter').disabled = true;
+      $('pinEnter').textContent = origText;
+    }
+  } catch {
+    showAlert('Tidak bisa terhubung ke server.');
+    pin = '';
+    updatePinDisplay();
+    $('pinEnter').disabled = true;
+    $('pinEnter').textContent = origText;
+  }
+}
+
+// Auto-detect if next param hints a court tab
+if (nextUrl && /^\/court\/\d+/.test(nextUrl)) {
+  showTab('court');
+  const m = nextUrl.match(/\/court\/(\d+)/);
+  if (m) selectCourt(parseInt(m[1]));
+}
+</script>
+</body>
+</html>
