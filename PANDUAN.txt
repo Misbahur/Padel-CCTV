@@ -1,0 +1,155 @@
+PAPAN SKOR PADEL + PEREKAM CCTV
+================================
+
+Cara kerja
+----------
+1. Tekan "Main" (di layar atau tombol remote)  -> CCTV mulai merekam.
+2. Poin dicatat dengan remote Bluetooth seperti biasa.
+3. Pertandingan selesai -> rekaman lanjut 15 detik (selebrasi), lalu berhenti.
+4. File tersimpan di folder "rekaman", contoh:
+     20261018_190512_Yodi-Budi-vs-Rina-Sari_6-4_3-6_10-8_Lapangan-1.mp4
+     20261018_190512_Yodi-Budi-vs-Rina-Sari_6-4_3-6_10-8_poin.jsonl
+   File .jsonl berisi waktu setiap poin (detik ke berapa di video),
+   berguna untuk mencari momen penting.
+
+Jika poin terakhir dibatalkan (undo) sebelum rekaman berhenti,
+rekaman tetap berjalan dan pertandingan bisa dilanjutkan.
+
+
+VIDEO DENGAN PAPAN SKOR (GAYA SIARAN TV)
+----------------------------------------
+Setelah rekaman berhenti, program otomatis membuat file kedua:
+     ..._Lapangan-1_skor.mp4
+Isinya video yang sama dengan papan skor tertempel di pojok:
+skor berubah tepat saat poin terjadi, ada kilatan "GAME"/"SET",
+tanda AD/DEUCE/STAR POINT, dan layar pemenang beranimasi di akhir.
+Progresnya terlihat di halaman, bagian "Rekaman CCTV".
+
+- Rekaman asli tidak diubah. Proses ini butuh waktu kira-kira
+  1/4 sampai 1/2 lama pertandingan (laptop biasa, video 1080p).
+- Ingin lihat skor tanpa menunggu? Buka video ASLI di VLC:
+  file .ass dengan nama sama otomatis tampil sebagai papan skor.
+- Skor terasa lebih cepat/lambat dari kejadian di video?
+  Atur "offset_seconds" (contoh 1.5 = skor muncul 1,5 detik lebih
+  lambat), lalu buat ulang videonya lewat Command Prompt:
+     python padel_cctv.py --render rekaman\NAMA_VIDEO.mp4 --offset 1.5
+
+Pengaturan "overlay" di config.json:
+  position       : top-left, top-right, bottom-left, bottom-right
+                   (pilih pojok yang tidak tertutup tanggal/jam CCTV)
+  scale          : ukuran papan, 1.0 = normal, 1.3 = lebih besar
+  offset_seconds : geser waktu skor (lihat di atas)
+  preset / crf   : kecepatan & kualitas. "veryfast" + 21 sudah bagus;
+                   laptop lambat bisa pakai "superfast"
+  keep_original  : false = hapus rekaman asli setelah video skor jadi
+  enabled        : false = matikan pembuatan video skor
+
+
+PERSIAPAN (sekali saja, di laptop/PC Windows)
+--------------------------------------------
+1. Pasang Python 3: https://www.python.org/downloads/
+   (centang "Add Python to PATH" saat instalasi)
+2. Pasang ffmpeg: buka Command Prompt, ketik
+      winget install ffmpeg
+   lalu tutup dan buka lagi Command Prompt.
+3. Laptop harus satu jaringan (Wi-Fi/LAN) dengan CCTV.
+4. Tambahkan kamera dari halaman papan skor (lihat bagian Bardi),
+   atau isi alamat RTSP manual di config.json dengan Notepad.
+
+
+MENGHUBUNGKAN CCTV BARDI
+------------------------
+1. Di aplikasi Bardi Smart Home: buka kamera > ikon pengaturan > ONVIF.
+   Aktifkan, lalu buat password ONVIF.
+2. Di layar yang sama, ubah ke IP Statis dan catat IP kamera.
+3. Di halaman papan skor, buka "Tambah kamera":
+   - tekan "Cari kamera di jaringan" lalu ketuk kamera yang muncul,
+     atau tulis IP-nya,
+   - username: admin, password: password ONVIF tadi,
+   - tekan "Cek & simpan". Alamat RTSP dicari dan disimpan otomatis.
+4. Tekan "Tes kamera". Titik hijau = siap merekam.
+
+Tidak ada menu ONVIF? Perbarui aplikasi dan firmware kamera. Jika tetap
+tidak ada, model tersebut belum mendukung perekaman lokal.
+Form "Tambah kamera" juga bisa dipakai untuk merek lain di bawah ini.
+
+
+ALAMAT RTSP (contoh umum, cek manual kamera Anda)
+-------------------------------------------------
+Bardi (setelah ONVIF aktif):
+  rtsp://admin:PASSWORDONVIF@192.168.1.50:8554/Streaming/Channels/101
+Hikvision / HiLook:
+  rtsp://admin:PASSWORD@192.168.1.64:554/Streaming/Channels/101
+  (101 = kamera 1 kualitas utama, 201 = kamera 2, dst. untuk NVR)
+Dahua / Imou:
+  rtsp://admin:PASSWORD@192.168.1.108:554/cam/realmonitor?channel=1&subtype=0
+EZVIZ (kode verifikasi ada di stiker bawah kamera):
+  rtsp://admin:KODEVERIFIKASI@192.168.1.50:554/h264/ch1/main/av_stream
+TP-Link Tapo (buat akun kamera dulu di aplikasi Tapo > Pengaturan Lanjutan):
+  rtsp://AKUNKAMERA:PASSWORD@192.168.1.70:554/stream1
+Uniview:
+  rtsp://admin:PASSWORD@192.168.1.13:554/unicast/c1/s0/live
+
+Tips: jika password berisi karakter @ : / atau #, ganti dengan kode:
+  @ = %40   : = %3A   / = %2F   # = %23
+
+Lebih dari satu kamera? Tambahkan ke daftar "cameras":
+  "cameras": [
+    {"name": "Lapangan 1", "rtsp": "rtsp://..."},
+    {"name": "Sudut Belakang", "rtsp": "rtsp://..."}
+  ]
+Semua kamera merekam bersamaan, satu file per kamera.
+
+
+MENJALANKAN
+-----------
+Klik dua kali  jalankan.bat
+(atau: python padel_cctv.py, lalu buka http://localhost:8080)
+
+Di halaman, tekan "Tes kamera" untuk memastikan CCTV terhubung.
+
+Papan skor juga bisa dibuka dari tablet/HP di jaringan yang sama:
+alamatnya muncul di jendela hitam saat program jalan, contoh
+http://192.168.1.20:8080. Sambungkan remote Bluetooth ke perangkat
+yang menampilkan papan skor.
+
+Tombol remote bawaan (misal MIXIO RB-04 / RB-02):
+  Main          : Tombol Kamera (📷) / Enter / Spasi
+  Tim A         : Panah Kiri (<)
+  Tim B         : Panah Kanan (>)
+  Ganti Servis  : Panah Atas (⌃)
+  Batalkan Poin : Tombol Hati (🤍) / Panah Bawah (⌄)
+Gunakan "Atur tombol remote" untuk memasang tombol remote Anda sendiri.
+
+REMOTE TIKTOK / MULTI-FUNCTION (mis. MIXIO RB-02)
+-------------------------------------------------
+Remote dengan tombol panah dan ikon hati meniru jari di layar (geser
+dan ketuk), bukan tombol keyboard. Papan skor biasa tidak bereaksi.
+1. Sambungkan remote ke HP/tablet, buka papan skor di perangkat itu.
+2. Tekan "Buka mode remote sentuh" (bagian Remote Bluetooth).
+3. Bawaan: geser kiri = Tim A, geser kanan = Tim B,
+   geser bawah = batalkan, ketuk (hati) = Main.
+4. Tombol menghasilkan gerakan lain? Tekan "Atur gerakan remote",
+   lalu tekan tombol remote untuk Main, Tim A, Tim B, Batalkan.
+5. Tekan "Keluar" untuk kembali ke tampilan biasa.
+Tombol kamera (1/2) biasanya mengirim Volume +, yang ditangkap HP/Mac.
+Paling andal di HP/tablet Android dan iPad.
+
+
+PENGATURAN LAIN (config.json)
+-----------------------------
+post_roll_seconds : lama rekaman lanjut setelah pertandingan selesai (detik)
+output_dir        : folder penyimpanan video
+audio             : false jika ingin video tanpa suara
+port              : ganti jika 8080 dipakai program lain
+
+
+JIKA ADA MASALAH
+----------------
+"401 Unauthorized"         -> username/password kamera salah
+"Connection timed out"     -> IP salah atau laptop beda jaringan
+"404 Not Found"            -> path RTSP salah, cek model kamera
+Stream putus di tengah     -> program menyambung ulang otomatis;
+                              lanjutannya tersimpan sebagai file _part2, _part3
+Video tersimpan walau laptop mati mendadak (format MP4 tahan putus).
+Detail error per kamera ada di file .log di folder rekaman.
