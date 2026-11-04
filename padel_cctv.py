@@ -371,6 +371,19 @@ class Session:
         self.match_state = _load_court_state(court_cfg.get("id"))
         self._render_q = None  # set externally after RenderQueue created
 
+    def reset_match(self):
+        with self.lock:
+            self.match_state = None
+            self.bookmarks = []
+            fpath = os.path.join(BASE, f"court_{self._cfg['id']}_state.json")
+            if os.path.exists(fpath):
+                try:
+                    os.remove(fpath)
+                except OSError:
+                    pass
+            print(f"🔄 RESET MATCH STATE [{self._cfg['name']}]: Siap untuk pertandingan baru")
+            return {"ok": True}
+
     def _save_bookmarks_file(self, target_base=None):
         base = target_base or self.base
         if not base or not self.bookmarks:
@@ -582,13 +595,16 @@ class Session:
 
     def status(self):
         rq = self._render_q
+        render_jobs = rq.status() if rq else []
+        is_render_busy = any(j.get("state") in ("antre", "proses") for j in render_jobs)
         return {
             "court_id": self._cfg["id"],
             "court_name": self._cfg["name"],
             "names": self._cfg.get("names", ["Tim A", "Tim B"]),
             "settings": self._cfg.get("match_rules", COURT_DEFAULT["match_rules"]),
             "recording": self.recording,
-            "renders": rq.status() if rq else [],
+            "renders": render_jobs,
+            "render_busy": is_render_busy,
             "elapsed": round(time.time() - self.t0) if self.recording else 0,
             "stopping_in": max(0, round(self.stop_at - time.time())) if self.stop_at else None,
             "cameras": [r.status() for r in self.recorders],
@@ -734,9 +750,14 @@ def _save_court_names(court_id, names):
 
 def _save_court_state(court_id, state):
     """Menyimpan status skor pertandingan terakhir ke file json agar tahan mati lampu / restart."""
-    if not state:
-        return
     fpath = os.path.join(BASE, f"court_{court_id}_state.json")
+    if not state or not state.get("started"):
+        if os.path.exists(fpath):
+            try:
+                os.remove(fpath)
+            except OSError:
+                pass
+        return
     try:
         with open(fpath, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2, ensure_ascii=False)
@@ -1119,6 +1140,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(s.stop(data.get("summary")))
             elif action == "cancel-stop":
                 self._json(s.cancel_stop())
+            elif action == "reset-match":
+                self._json(s.reset_match())
             elif action == "test":
                 self._json(s.test())
             elif action == "discover":

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Tv, Camera, Video, Settings, LogOut, Users, Play, Square, 
-  RefreshCw, CheckCircle2, AlertTriangle, Shield, Eye, Plus, Trash2, Sliders, Clock, Lock
+  RefreshCw, CheckCircle2, AlertTriangle, Shield, Eye, Plus, Trash2, Sliders, Clock, Lock, RotateCcw
 } from 'lucide-react';
 
 const MODE_HINTS = {
@@ -513,13 +513,29 @@ export default function DashboardView({ navigate }) {
                         </button>
                       )
                     ) : (
-                      <button
-                        onClick={() => handleStartRec(cid)}
-                        className="py-2 px-3 rounded-xl bg-emerald-600/15 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-400 hover:text-white text-xs font-score font-black tracking-wider uppercase flex items-center justify-center gap-1.5 transition-all"
-                      >
-                        <Play className="w-3.5 h-3.5 fill-current" />
-                        <span>Mulai Rekam CCTV</span>
-                      </button>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleStartRec(cid)}
+                          className="flex-1 py-2 px-3 rounded-xl bg-emerald-600/15 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-400 hover:text-white text-xs font-score font-black tracking-wider uppercase flex items-center justify-center gap-1.5 transition-all"
+                        >
+                          <Play className="w-3.5 h-3.5 fill-current" />
+                          <span>Mulai Rekam</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (window.confirm(`Reset papan skor Lapangan ${cid} ke 0-0?`)) {
+                              await fetch(`/api/court/${cid}/reset-match`, { method: 'POST' });
+                              fetchStatus();
+                            }
+                          }}
+                          className="py-2 px-3 rounded-xl bg-padel-card hover:bg-red-500/20 border border-padel-border/60 text-slate-400 hover:text-red-400 text-xs font-semibold flex items-center justify-center gap-1 transition-colors"
+                          title={`Reset papan skor Lapangan ${cid} ke 0-0`}
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          <span>Reset</span>
+                        </button>
+                      </div>
                     )}
 
                     {/* RECENT RECORDING SUMMARY */}

@@ -413,17 +413,16 @@ export default function CourtView({ courtId, navigate }) {
         }));
       }
       // Server State Synchronization (Feature 4 - Auto-Recovery)
-      if (data.match_state && typeof data.match_state === 'object' && data.match_state.started) {
+      // Hanya auto-recover skor jika CCTV di server memang sedang aktif merekam pertandingan
+      if (data.recording && data.match_state && typeof data.match_state === 'object' && data.match_state.started) {
         setState(prev => {
           if (!prev.started) {
             return data.match_state;
           }
-          if (data.recording) {
-            const srvSummary = getMatchSummary(data.match_state);
-            const locSummary = getMatchSummary(prev);
-            if (srvSummary !== locSummary) {
-              return data.match_state;
-            }
+          const srvSummary = getMatchSummary(data.match_state);
+          const locSummary = getMatchSummary(prev);
+          if (srvSummary !== locSummary) {
+            return data.match_state;
           }
           return prev;
         });
@@ -1162,7 +1161,62 @@ export default function CourtView({ courtId, navigate }) {
     setShowMatchModal(true);
   };
 
-  const isMatchActive = Boolean(courtStatus?.recording || state.started);
+  // Match dianggap aktif HANYA JIKA sedang merekam DAN pertandingan belum selesai (belum ada pemenang)
+  const isMatchActive = Boolean(courtStatus?.recording && state.started && state.winner === null);
+
+  // Reset Pertandingan ke Kondisi Standby (0-0)
+  const resetMatch = async (silent = false) => {
+    const freshState = {
+      started: false,
+      sets: [],
+      games: [0, 0],
+      pts: [0, 0],
+      deuces: 0,
+      tb: false,
+      stb: false,
+      server: 0,
+      tbStart: 0,
+      setsWon: [0, 0],
+      winner: null,
+      total: 0
+    };
+    setState(freshState);
+    setHistory([]);
+    celebrationLockRef.current = 0;
+    setCelebrationLockSeconds(0);
+    try {
+      localStorage.removeItem(`padel.c${courtId}.state`);
+    } catch (e) {}
+    try {
+      await fetch(`/api/court/${courtId}/reset-match`, { method: 'POST' });
+      sendEvent('papan', {}, freshState);
+    } catch (e) {}
+    if (!silent) {
+      triggerFlash('🔄 Papan Skor Direset (0-0) · Siap Pertandingan Baru');
+    }
+    pollStatus();
+  };
+
+  // Auto-Reset Papan Skor setelah Proses Render Video Selesai
+  const prevRenderBusyRef = useRef(false);
+  useEffect(() => {
+    const renders = courtStatus?.renders || [];
+    const isBusy = renders.some(j => j.state === 'proses' || j.state === 'antre');
+    const hasFinished = renders.some(j => j.state === 'selesai');
+
+    // Jika sebelumnya sedang proses render, dan sekarang sudah selesai semua & rekaman sudah stop
+    if (prevRenderBusyRef.current && !isBusy && hasFinished && !courtStatus?.recording) {
+      if (state.started) {
+        triggerFlash('🎉 Video selesai diproses! Menyiapkan papan skor untuk pertandingan baru...');
+        const timer = setTimeout(() => {
+          resetMatch(true);
+          triggerFlash('✨ Papan Skor Siap! Silakan atur format atau mulai pertandingan baru');
+        }, 5000);
+        return () => clearTimeout(timer);
+      }
+    }
+    prevRenderBusyRef.current = isBusy;
+  }, [courtStatus?.renders, courtStatus?.recording, state.started]);
 
   const handleSaveSettingsAndNames = async () => {
     const nameA = [pA1.trim(), pA2.trim()].filter(Boolean).join(' / ') || 'Tim A';
@@ -1530,6 +1584,23 @@ export default function CourtView({ courtId, navigate }) {
                 <Play className="w-7 h-7 fill-black" />
                 <span>Mulai Pertandingan & Rekam CCTV</span>
               </button>
+            ) : state.winner !== null ? (
+              <div className="w-full flex flex-col sm:flex-row gap-3">
+                <button
+                  onClick={openMatchModal}
+                  className="flex-1 py-5 rounded-2xl bg-padel-volt hover:bg-padel-voltHover text-black font-score font-black text-xl tracking-wider uppercase shadow-xl shadow-padel-volt/20 flex items-center justify-center gap-3 transition-all active:scale-98"
+                >
+                  <Play className="w-6 h-6 fill-black" />
+                  <span>Pertandingan Baru / Atur Format</span>
+                </button>
+                <button
+                  onClick={() => resetMatch()}
+                  className="px-6 py-5 rounded-2xl bg-padel-card hover:bg-padel-border/80 border border-padel-border text-white font-score font-bold text-base tracking-wider uppercase flex items-center justify-center gap-2 transition-all active:scale-98"
+                >
+                  <RotateCcw className="w-5 h-5 text-padel-volt" />
+                  <span>Reset Papan Skor (0-0)</span>
+                </button>
+              </div>
             ) : (
               <div className="grid grid-cols-2 gap-4">
                 <button
@@ -1607,10 +1678,23 @@ export default function CourtView({ courtId, navigate }) {
 
               <button
                 onClick={openMatchModal}
-                className="px-4 py-2.5 rounded-xl bg-padel-surface hover:bg-red-500/20 border border-padel-border/60 text-xs font-semibold text-red-400 flex items-center gap-1.5 transition-colors"
+                className="px-4 py-2.5 rounded-xl bg-padel-surface hover:bg-padel-card border border-padel-border/60 text-xs font-semibold text-padel-volt flex items-center gap-1.5 transition-colors"
               >
-                <span>Pertandingan Baru</span>
+                <Settings className="w-3.5 h-3.5" />
+                <span>{isMatchActive ? 'Atur Pemain' : 'Atur Match & Format'}</span>
               </button>
+
+              {state.started && (
+                <button
+                  type="button"
+                  onClick={() => resetMatch()}
+                  className="px-4 py-2.5 rounded-xl bg-padel-surface hover:bg-red-500/20 border border-padel-border/60 text-xs font-semibold text-red-400 flex items-center gap-1.5 transition-colors"
+                  title="Kembalikan papan skor ke 0-0"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Reset Skor (0-0)</span>
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -1723,7 +1807,7 @@ export default function CourtView({ courtId, navigate }) {
               <div>
                 <span className="text-xs font-bold text-padel-volt uppercase tracking-wider block">Pengaturan Match</span>
                 <h3 className="text-xl sm:text-2xl font-score font-black text-white uppercase tracking-wider">
-                  {isMatchActive ? 'Atur Pemain (Match Aktif)' : 'Mulai Pertandingan'}
+                  {isMatchActive ? 'Atur Pemain (Match Berjalan)' : 'Mulai Pertandingan & Format'}
                 </h3>
               </div>
               <button
@@ -1929,13 +2013,26 @@ export default function CourtView({ courtId, navigate }) {
               >
                 Batal
               </button>
+              {!isMatchActive && state.started && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowMatchModal(false);
+                    resetMatch();
+                  }}
+                  className="px-4 py-2.5 rounded-xl bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-red-300 font-score font-bold text-xs sm:text-sm tracking-wider uppercase transition-colors"
+                  title="Kembalikan papan skor ke 0-0 standby"
+                >
+                  Reset Skor (0-0)
+                </button>
+              )}
               <button
                 type="button"
                 onClick={handleSaveSettingsAndNames}
                 className="px-4 py-2.5 rounded-xl bg-slate-700 hover:bg-slate-600 text-white font-score font-bold text-xs sm:text-sm tracking-wider uppercase transition-colors"
                 title="Simpan pengaturan & nama pemain tanpa mereset skor pertandingan saat ini"
               >
-                {isMatchActive ? 'Simpan Nama Pemain' : 'Simpan Pengaturan & Nama'}
+                {isMatchActive ? 'Simpan Nama Pemain' : 'Simpan Pengaturan'}
               </button>
               <button
                 type="button"
