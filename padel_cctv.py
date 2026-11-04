@@ -367,12 +367,14 @@ class Session:
         self.stop_timer = None
         self.stop_at = 0
         self.recent = []
+        self.bookmarks = []
         self._render_q = None  # set externally after RenderQueue created
 
     def start(self, info):
         with self.lock:
             if self.recording:
                 return {"ok": True, "already": True}
+            self.bookmarks = []
             names = info.get("names") or self._cfg.get("names") or ["Tim A", "Tim B"]
             # Sinkronkan format aturan pertandingan jika dikirimkan di start
             rules = self._cfg.setdefault("match_rules", dict(COURT_DEFAULT["match_rules"]))
@@ -459,6 +461,18 @@ class Session:
             if self.recording:
                 if data.get("board") and data.get("event") != "papan":
                     self.has_board = True
+                ev = data.get("event")
+                if ev in ("bookmark", "mark", "highlight"):
+                    now = time.time()
+                    elapsed = round(now - self.t0, 1)
+                    bm = {
+                        "t": elapsed,
+                        "time_str": f"{int(elapsed // 60):02d}:{int(elapsed % 60):02d}",
+                        "skor": data.get("skor", ""),
+                        "note": data.get("note", "highlight")
+                    }
+                    self.bookmarks.append(bm)
+                    print(f"❤️ PENANDA MOMEN KLIP [{self._cfg['name']}]: {bm['time_str']} (Skor: {bm['skor']})")
                 self._write_event(data)
                 return {"ok": True}
         return {"ok": True}
@@ -546,6 +560,7 @@ class Session:
             "elapsed": round(time.time() - self.t0) if self.recording else 0,
             "stopping_in": max(0, round(self.stop_at - time.time())) if self.stop_at else None,
             "cameras": [r.status() for r in self.recorders],
+            "bookmarks": list(self.bookmarks),
             "recent": self.recent,
             "post_roll": self._cfg.get("post_roll_seconds", 15),
             "folder": self._cfg["output_dir"],

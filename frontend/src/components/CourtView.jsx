@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Play, Square, RotateCcw, ArrowLeftRight, Maximize, Minimize, Users, 
   Settings, LogOut, Radio, ChevronRight, Zap, Volume2, Shield, Clock, Video,
-  Smartphone, Bug
+  Smartphone, Bug, Heart
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -26,6 +26,10 @@ const DEF_KEYS = {
   ],
   serve: [
     'KeyS', 's', 'S', 'Digit3', '3', 'Numpad3', 'Tab'
+  ],
+  mark: [
+    'KeyL', 'l', 'L', 'Heart', 'Like', 'Digit5', '5', 'Numpad5', 'KeyH', 'h', 'H',
+    'BrowserFavorites', 'MediaSelect', 'F12', 'F13', 'F14', 'F15'
   ],
   undo: [
     'Backspace', 'Delete', 'KeyZ', 'z', 'Z', 'MediaPlayPause', 'MediaStop'
@@ -566,12 +570,24 @@ export default function CourtView({ courtId, navigate }) {
     });
   };
 
+  // Penanda Waktu Momen Klip (Love ❤️ / Bookmark)
+  const handleBookmark = () => {
+    const elapsedSec = courtStatus?.elapsed || 0;
+    const timeStr = `${Math.floor(elapsedSec / 60)}:${String(elapsedSec % 60).padStart(2, '0')}`;
+    const score = getMatchSummary(state);
+    triggerFlash(`❤️ Momen Klip Ditandai (${timeStr})`);
+    setLastRemoteAction({ key: '❤️ Love / Mark', action: 'Tandai Momen Klip', ok: true });
+    logSignal('bookmark', { elapsed: elapsedSec, time: timeStr, score });
+    sendEvent('bookmark', { note: 'highlight', time: timeStr, skor: score }, state);
+  };
+
   // Remote Learning Steps
   const LEARN_STEPS = [
     { act: 'start', title: 'Tombol Main / Mulai', desc: 'Tekan tombol remote yang ingin dipakai untuk Mulai Pertandingan' },
     { act: 'a', title: `Tambah Poin ${cfg.names?.[0] || 'Tim A'}`, desc: `Tekan tombol remote untuk menambah poin ${cfg.names?.[0] || 'Tim A'}` },
     { act: 'b', title: `Tambah Poin ${cfg.names?.[1] || 'Tim B'}`, desc: `Tekan tombol remote untuk menambah poin ${cfg.names?.[1] || 'Tim B'}` },
     { act: 'serve', title: 'Ganti Servis', desc: 'Tekan tombol remote untuk Ganti Servis (atau Lewati)' },
+    { act: 'mark', title: 'Penanda Momen Klip (❤️ Love)', desc: 'Tekan tombol Love / Mark pada remote untuk menandai momen klip video' },
     { act: 'undo', title: 'Batalkan Poin (Undo)', desc: 'Tekan tombol remote untuk batalkan poin (bisa juga tekan lama tombol tim)' }
   ];
 
@@ -705,6 +721,8 @@ export default function CourtView({ courtId, navigate }) {
         addPoint(1);
       } else if (act === 'serve') {
         swapServe();
+      } else if (act === 'mark') {
+        handleBookmark();
       } else if (act === 'undo') {
         undoPoint();
       }
@@ -730,6 +748,7 @@ export default function CourtView({ courtId, navigate }) {
         a: cfg.names?.[0] || 'Tim A',
         b: cfg.names?.[1] || 'Tim B',
         serve: 'Ganti Servis',
+        mark: 'Tandai Momen (❤️ Love)',
         undo: 'Batalkan Poin',
         start: 'Mulai Pertandingan'
       };
@@ -976,6 +995,12 @@ export default function CourtView({ courtId, navigate }) {
                 <span className="w-2 h-2 rounded-full bg-red-500" />
                 REC {courtStatus.elapsed ? `${Math.floor(courtStatus.elapsed / 60)}:${String(courtStatus.elapsed % 60).padStart(2, '0')}` : ''}
               </span>
+              {courtStatus?.bookmarks?.length > 0 && (
+                <span className="px-2 py-1 rounded-full bg-pink-500/20 border border-pink-500/50 text-pink-300 text-xs font-bold font-score uppercase tracking-wider flex items-center gap-1 shadow-sm">
+                  <Heart className="w-3 h-3 fill-current text-pink-400" />
+                  {courtStatus.bookmarks.length} Klip
+                </span>
+              )}
               <button
                 type="button"
                 onClick={() => handleManualStop(true)}
@@ -1182,6 +1207,24 @@ export default function CourtView({ courtId, navigate }) {
                 <ArrowLeftRight className="w-3.5 h-3.5" />
                 <span>Ganti Servis</span>
               </button>
+
+              {/* TOMBOL TANDAI MOMEN KLIP (LOVE / HIGHLIGHT) */}
+              {courtStatus?.recording && (
+                <button
+                  type="button"
+                  onClick={handleBookmark}
+                  className="px-4 py-2.5 rounded-xl bg-pink-500/15 hover:bg-pink-500/30 border border-pink-500/50 text-xs font-semibold text-pink-300 hover:text-white flex items-center gap-1.5 transition-all active:scale-95 shadow-sm"
+                  title="Tandai momen seru saat ini untuk klip video highlight (Tombol Love ❤️ pada remote MIXIO)"
+                >
+                  <Heart className="w-3.5 h-3.5 fill-current text-pink-400" />
+                  <span>Tandai Momen</span>
+                  {courtStatus?.bookmarks?.length > 0 && (
+                    <span className="ml-1 px-1.5 py-0.5 rounded-full bg-pink-500 text-black font-bold text-[10px]">
+                      {courtStatus.bookmarks.length}
+                    </span>
+                  )}
+                </button>
+              )}
 
               {/* TOMBOL STOP REKAM / SELESAI PERTANDINGAN */}
               {courtStatus?.recording && (
@@ -1593,13 +1636,23 @@ export default function CourtView({ courtId, navigate }) {
               <span className="text-[10px] uppercase font-bold text-padel-volt tracking-wider block">Mode Remote Sentuh / TikTok</span>
               <span className="text-xs text-slate-300">MIXIO & Clicker Gestur Aktif</span>
             </div>
-            <button
-              type="button"
-              onClick={openMatchModal}
-              className="px-4 py-2 rounded-xl bg-padel-volt text-black text-xs font-score font-bold uppercase transition-all"
-            >
-              Atur Match
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleBookmark}
+                className="px-3.5 py-2 rounded-xl bg-pink-500/20 hover:bg-pink-500/40 border border-pink-500/60 text-pink-300 text-xs font-bold flex items-center gap-1.5 transition-all active:scale-95 shadow"
+              >
+                <Heart className="w-3.5 h-3.5 fill-current text-pink-400" />
+                <span>❤️ Tandai Klip</span>
+              </button>
+              <button
+                type="button"
+                onClick={openMatchModal}
+                className="px-4 py-2 rounded-xl bg-padel-volt text-black text-xs font-score font-bold uppercase transition-all"
+              >
+                Atur Match
+              </button>
+            </div>
           </div>
 
           {/* COMPACT FLOATING SCOREBOARD */}
