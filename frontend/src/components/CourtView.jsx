@@ -1,11 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Play, Square, RotateCcw, ArrowLeftRight, Maximize, Minimize, Users, 
-  Settings, LogOut, Radio, ChevronRight, Zap, Volume2, Shield, Clock, Video
+  Settings, LogOut, Radio, ChevronRight, Zap, Volume2, Shield, Clock, Video,
+  Smartphone, Bug
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
 const POINT_LABELS = ['0', '15', '30', '40'];
+
+const MODE_HINTS = {
+  golden: 'Golden Point: di 40–40 (deuce), 1 poin langsung menentukan pemenang game. Penerima servis memilih sisi lapangan.',
+  adv: 'Advantage (Klasik Tenis): di 40–40, tim harus unggul 2 poin berturut-turut untuk memenangkan game.',
+  star: 'Star Point (Aturan FIP): 2x advantage boleh dimainkan; jika deuce ketiga, 1 star point langsung menentukan game.',
+  americano: 'Americano / Mexicano: hitung total poin akumulatif sampai target (misal 24). Servis berpindah setiap 4 poin.'
+};
 
 const DEF_KEYS = {
   a: [
@@ -15,6 +23,9 @@ const DEF_KEYS = {
   b: [
     'ArrowRight', 'ArrowDown', 'PageDown', 'KeyB', 'b', 'B', 'Digit2', '2', 'Numpad2',
     'AudioVolumeDown', 'VolumeDown', 'MediaTrackNext', 'MediaNextTrack'
+  ],
+  serve: [
+    'KeyS', 's', 'S', 'Digit3', '3', 'Numpad3', 'Tab'
   ],
   undo: [
     'Backspace', 'Delete', 'KeyZ', 'z', 'Z', 'MediaPlayPause', 'MediaStop'
@@ -90,6 +101,14 @@ export default function CourtView({ courtId, navigate }) {
   const [selectedBestOf, setSelectedBestOf] = useState(cfg.bestOf || 3);
   const [selectedGames, setSelectedGames] = useState(cfg.games || 6);
   const [selectedSuperTb, setSelectedSuperTb] = useState(cfg.superTb || false);
+  const [selectedTarget, setSelectedTarget] = useState(cfg.target || 24);
+
+  // TikTok / Touch Gesture Mode & Signal Debugger
+  const [showTouchMode, setShowTouchMode] = useState(false);
+  const [touchFeedback, setTouchFeedback] = useState(null);
+  const [showSignalDebugger, setShowSignalDebugger] = useState(false);
+  const [remoteSignals, setRemoteSignals] = useState([]);
+  const pointerDownRef = useRef(null);
 
   // Remote Bluetooth Mapping & Learning
   const [customKeys, setCustomKeys] = useState(() => {
@@ -111,6 +130,23 @@ export default function CourtView({ courtId, navigate }) {
   const learnWaitingRef = useRef(false);
   const audioRef = useRef(null);
   const pendingRemoteRef = useRef({});
+
+  const logSignal = (type, details) => {
+    const entry = {
+      id: Date.now() + Math.random(),
+      timestamp: new Date().toLocaleTimeString(),
+      type,
+      ...details
+    };
+    setRemoteSignals(prev => [entry, ...prev.slice(0, 29)]);
+    try {
+      fetch(`/api/court/${courtId}/log-key`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(entry)
+      }).catch(() => {});
+    } catch (e) {}
+  };
 
   useEffect(() => {
     showLearnModalRef.current = showLearnModal;
@@ -146,6 +182,16 @@ export default function CourtView({ courtId, navigate }) {
           }
           return prev;
         });
+      }
+      if (data.settings && typeof data.settings === 'object') {
+        setCfg(prev => ({
+          ...prev,
+          mode: data.settings.mode || prev.mode || 'golden',
+          bestOf: data.settings.bestOf || prev.bestOf || 3,
+          games: data.settings.games || prev.games || 6,
+          superTb: data.settings.superTb !== undefined ? data.settings.superTb : (prev.superTb || false),
+          target: data.settings.target || prev.target || 24,
+        }));
       }
     } catch (e) {
       console.error(e);
@@ -198,9 +244,9 @@ export default function CourtView({ courtId, navigate }) {
   // PADEL SCORING LOGIC
   const tbServer = (start, n) => Math.floor((n + 1) / 2) % 2 === 0 ? start : 1 - start;
 
-  const startMatch = async (customNames = cfg.names) => {
-    const updatedCfg = { ...cfg, names: customNames };
-    setCfg(updatedCfg);
+  const startMatch = async (customNames = cfg.names, customCfg = null) => {
+    const activeCfg = customCfg ? { ...customCfg, names: customNames } : { ...cfg, names: customNames };
+    setCfg(activeCfg);
     const freshState = {
       started: true,
       sets: [],
@@ -222,9 +268,19 @@ export default function CourtView({ courtId, navigate }) {
       await fetch(`/api/court/${courtId}/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ names: customNames, mode: cfg.mode })
+        body: JSON.stringify({
+          names: customNames,
+          mode: activeCfg.mode,
+          match_rules: {
+            mode: activeCfg.mode,
+            bestOf: activeCfg.bestOf,
+            games: activeCfg.games,
+            superTb: activeCfg.superTb,
+            target: activeCfg.target
+          }
+        })
       });
-      sendEvent('papan', {}, freshState);
+      sendEvent('papan', {}, freshState, activeCfg);
       pollStatus();
     } catch (e) {}
   };
@@ -380,16 +436,19 @@ export default function CourtView({ courtId, navigate }) {
     return `Set ${Math.min(s.sets.length + 1, cfg.bestOf)} · ${m}`;
   };
 
-  const getMatchSummary = (s = state) => {
+  const getMatchSummary = (s = state, currentCfg = cfg) => {
+    if (currentCfg.mode === 'americano') {
+      return `${s.pts[0]}-${s.pts[1]}`;
+    }
     if (s.sets && s.sets.length > 0) {
       return s.sets.map(x => x.stb ? `[${x.g[0]}-${x.g[1]}]` : `${x.g[0]}-${x.g[1]}`).join(' ');
     }
     return `${s.games[0]}-${s.games[1]}`;
   };
 
-  const createBoardSnap = (s = state, pointFlash = null) => {
-    const am = cfg.mode === 'americano';
-    const n = am ? 0 : cfg.bestOf;
+  const createBoardSnap = (s = state, pointFlash = null, currentCfg = cfg) => {
+    const am = currentCfg.mode === 'americano';
+    const n = am ? 0 : currentCfg.bestOf;
     const sets = [], won = [];
     for (let k = 0; k < n; k++) {
       if (k < s.sets.length) {
@@ -407,7 +466,7 @@ export default function CourtView({ courtId, navigate }) {
     const pts = (s.winner !== null && !am) ? ['', ''] : [getPtsLabel(0, s), getPtsLabel(1, s)];
     const st = getStatusText(s);
     return {
-      names: [...cfg.names],
+      names: [...currentCfg.names],
       cols: n,
       sets,
       won,
@@ -425,15 +484,15 @@ export default function CourtView({ courtId, navigate }) {
     };
   };
 
-  const sendEvent = async (ev, extra = {}, s = state) => {
+  const sendEvent = async (ev, extra = {}, s = state, currentCfg = cfg) => {
     try {
-      const snap = createBoardSnap(s, extra.flash || null);
+      const snap = createBoardSnap(s, extra.flash || null, currentCfg);
       await fetch(`/api/court/${courtId}/event`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           event: ev,
-          skor: getMatchSummary(s),
+          skor: getMatchSummary(s, currentCfg),
           board: snap,
           ...extra
         })
@@ -512,6 +571,7 @@ export default function CourtView({ courtId, navigate }) {
     { act: 'start', title: 'Tombol Main / Mulai', desc: 'Tekan tombol remote yang ingin dipakai untuk Mulai Pertandingan' },
     { act: 'a', title: `Tambah Poin ${cfg.names?.[0] || 'Tim A'}`, desc: `Tekan tombol remote untuk menambah poin ${cfg.names?.[0] || 'Tim A'}` },
     { act: 'b', title: `Tambah Poin ${cfg.names?.[1] || 'Tim B'}`, desc: `Tekan tombol remote untuk menambah poin ${cfg.names?.[1] || 'Tim B'}` },
+    { act: 'serve', title: 'Ganti Servis', desc: 'Tekan tombol remote untuk Ganti Servis (atau Lewati)' },
     { act: 'undo', title: 'Batalkan Poin (Undo)', desc: 'Tekan tombol remote untuk batalkan poin (bisa juga tekan lama tombol tim)' }
   ];
 
@@ -643,12 +703,16 @@ export default function CourtView({ courtId, navigate }) {
         addPoint(0);
       } else if (act === 'b') {
         addPoint(1);
+      } else if (act === 'serve') {
+        swapServe();
       } else if (act === 'undo') {
         undoPoint();
       }
     };
 
     const handleKeyDown = (e) => {
+      logSignal('key', { key: e.key, code: e.code, which: e.which });
+
       if (showLearnModalRef.current) {
         e.preventDefault();
         handleLearnKey(e);
@@ -665,6 +729,7 @@ export default function CourtView({ courtId, navigate }) {
       const labelMap = {
         a: cfg.names?.[0] || 'Tim A',
         b: cfg.names?.[1] || 'Tim B',
+        serve: 'Ganti Servis',
         undo: 'Batalkan Poin',
         start: 'Mulai Pertandingan'
       };
@@ -750,6 +815,7 @@ export default function CourtView({ courtId, navigate }) {
     if (flashMsg) return flashMsg;
     if (!state.started) return 'TEKAN MAIN UNTUK MEMULAI';
     if (state.winner !== null) return `PERTANDINGAN SELESAI · ${state.winner === 2 ? 'HASIL SERI' : cfg.names[state.winner] + ' MENANG'}`;
+    if (cfg.mode === 'americano') return `AMERICANO · TOTAL POIN ${state.total}/${cfg.target || 24} · SERVIS: ${cfg.names[state.server]}`;
     if (state.stb) return 'SUPER TIEBREAK (TARGET 10 POIN)';
     if (state.tb) return 'TIEBREAK GAME';
     const p = state.pts;
@@ -775,21 +841,38 @@ export default function CourtView({ courtId, navigate }) {
     setSelectedBestOf(cfg.bestOf || 3);
     setSelectedGames(cfg.games || 6);
     setSelectedSuperTb(cfg.superTb || false);
+    setSelectedTarget(cfg.target || 24);
     setShowMatchModal(true);
   };
 
-  const handleSaveNamesOnly = async () => {
+  const handleSaveSettingsAndNames = async () => {
     const nameA = [pA1.trim(), pA2.trim()].filter(Boolean).join(' / ') || 'Tim A';
     const nameB = [pB1.trim(), pB2.trim()].filter(Boolean).join(' / ') || 'Tim B';
     const names = [nameA, nameB];
-    setCfg(prev => ({ ...prev, names }));
+    const newCfg = {
+      ...cfg,
+      names,
+      mode: selectedMode,
+      bestOf: Number(selectedBestOf),
+      games: Number(selectedGames),
+      superTb: Boolean(selectedSuperTb),
+      target: Number(selectedTarget)
+    };
+    setCfg(newCfg);
     try {
-      await fetch(`/api/court/${courtId}/set-names`, {
+      await fetch(`/api/court/${courtId}/set-settings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ names })
+        body: JSON.stringify({
+          names,
+          mode: selectedMode,
+          bestOf: Number(selectedBestOf),
+          games: Number(selectedGames),
+          superTb: Boolean(selectedSuperTb),
+          target: Number(selectedTarget)
+        })
       });
-      triggerFlash(`Pemain: ${nameA} vs ${nameB}`);
+      triggerFlash('Pengaturan & Pemain Disimpan');
       pollStatus();
     } catch (e) {}
     setShowMatchModal(false);
@@ -808,13 +891,71 @@ export default function CourtView({ courtId, navigate }) {
       ...cfg,
       names,
       mode: selectedMode,
-      bestOf: selectedBestOf,
-      games: selectedGames,
-      superTb: selectedSuperTb
+      bestOf: Number(selectedBestOf),
+      games: Number(selectedGames),
+      superTb: Boolean(selectedSuperTb),
+      target: Number(selectedTarget)
     };
     setCfg(newCfg);
     setShowMatchModal(false);
-    startMatch(names);
+    startMatch(names, newCfg);
+  };
+
+  // Pointer Handlers for TikTok / Gesture Mode
+  const handleTouchPointerDown = (e) => {
+    if (e.target.closest('button')) return;
+    pointerDownRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      t: performance.now(),
+      id: e.pointerId
+    };
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
+  };
+
+  const handleTouchPointerUp = (e) => {
+    if (!pointerDownRef.current || e.pointerId !== pointerDownRef.current.id) return;
+    const pd = pointerDownRef.current;
+    pointerDownRef.current = null;
+    const dx = e.clientX - pd.x;
+    const dy = e.clientY - pd.y;
+    const dt = performance.now() - pd.t;
+    const th = Math.max(30, Math.min(window.innerWidth, window.innerHeight) * 0.05);
+
+    logSignal('pointer', { dx: Math.round(dx), dy: Math.round(dy), dt: Math.round(dt) });
+
+    if (Math.abs(dx) < th && Math.abs(dy) < th) {
+      if (dt < 700) {
+        setTouchFeedback('Ketuk → Mulai Pertandingan');
+        logSignal('gesture', { action: 'tap' });
+        if (!state.started) startMatch();
+        setTimeout(() => setTouchFeedback(null), 1200);
+      }
+      return;
+    }
+
+    if (Math.abs(dx) > Math.abs(dy)) {
+      if (dx < 0) {
+        setTouchFeedback(`👈 Swipe Kiri → +1 ${cfg.names[0]}`);
+        logSignal('gesture', { action: 'swipe-left', team: cfg.names[0] });
+        addPoint(0);
+      } else {
+        setTouchFeedback(`👉 Swipe Kanan → +1 ${cfg.names[1]}`);
+        logSignal('gesture', { action: 'swipe-right', team: cfg.names[1] });
+        addPoint(1);
+      }
+    } else {
+      if (dy < 0) {
+        setTouchFeedback('👆 Swipe Atas → Ganti Servis');
+        logSignal('gesture', { action: 'swipe-up' });
+        swapServe();
+      } else {
+        setTouchFeedback('👇 Swipe Bawah → Batalkan Poin');
+        logSignal('gesture', { action: 'swipe-down' });
+        undoPoint();
+      }
+    }
+    setTimeout(() => setTouchFeedback(null), 1200);
   };
 
   return (
@@ -879,7 +1020,11 @@ export default function CourtView({ courtId, navigate }) {
           
           {/* HEADER STRIP */}
           <div className="bg-padel-dark/90 px-6 py-2.5 border-b border-padel-border/60 flex items-center justify-between text-xs font-score tracking-widest text-slate-400 uppercase font-bold">
-            <span>SET {Math.min(state.sets.length + 1, cfg.bestOf)} · {cfg.mode.toUpperCase()} POINT</span>
+            <span>
+              {cfg.mode === 'americano'
+                ? `AMERICANO · TARGET ${cfg.target || 24} POIN`
+                : `SET ${Math.min(state.sets.length + 1, cfg.bestOf)} · ${cfg.mode.toUpperCase()} POINT`}
+            </span>
             <span className="text-padel-volt font-black animate-pulse">{getStatusBanner()}</span>
           </div>
 
@@ -915,12 +1060,22 @@ export default function CourtView({ courtId, navigate }) {
           {[0, 1].map((idx) => {
             const isServing = state.started && state.winner === null && state.server === idx;
             const isWinner = state.winner === idx;
+            const isAmericano = cfg.mode === 'americano';
+            const isLeading = isAmericano && state.pts[idx] > state.pts[1 - idx];
 
             return (
               <div
                 key={idx}
-                className={`grid grid-cols-12 items-center border-b border-padel-border/40 transition-colors ${
-                  isWinner ? 'bg-emerald-950/40' : idx === 1 ? 'bg-padel-surface/40' : 'bg-transparent'
+                onClick={() => addPoint(idx)}
+                title={`Klik / sentuh untuk tambah +1 poin ke ${cfg.names[idx]}`}
+                className={`grid grid-cols-12 items-center border-b border-padel-border/40 transition-colors cursor-pointer hover:bg-padel-surface/80 active:scale-[0.99] select-none ${
+                  isWinner
+                    ? 'bg-emerald-950/40'
+                    : isLeading
+                    ? 'bg-padel-volt/10'
+                    : idx === 1
+                    ? 'bg-padel-surface/40'
+                    : 'bg-transparent'
                 }`}
               >
                 {/* SERVE BALL */}
@@ -935,16 +1090,23 @@ export default function CourtView({ courtId, navigate }) {
                 </div>
 
                 {/* TEAM NAME */}
-                <div className="col-span-6 sm:col-span-7 py-5 px-3">
-                  <span className={`text-2xl sm:text-4xl font-score font-black tracking-wider uppercase truncate block ${
-                    isWinner ? 'text-padel-volt' : 'text-white'
-                  }`}>
-                    {cfg.names[idx]}
-                  </span>
+                <div className={`${isAmericano ? 'col-span-8 sm:col-span-8' : 'col-span-6 sm:col-span-7'} py-5 px-3`}>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-2xl sm:text-4xl font-score font-black tracking-wider uppercase truncate block ${
+                      isWinner ? 'text-padel-volt' : isLeading ? 'text-padel-volt' : 'text-white'
+                    }`}>
+                      {cfg.names[idx]}
+                    </span>
+                    {isLeading && (
+                      <span className="text-[10px] font-sans font-bold px-2 py-0.5 rounded bg-padel-volt text-black uppercase">
+                        Lead
+                      </span>
+                    )}
+                  </div>
                 </div>
 
-                {/* SETS WON */}
-                {Array.from({ length: cfg.bestOf }).map((_, sIdx) => {
+                {/* SETS WON (HIDDEN IN AMERICANO) */}
+                {!isAmericano && Array.from({ length: cfg.bestOf }).map((_, sIdx) => {
                   const setObj = state.sets[sIdx];
                   const setVal = setObj ? setObj.g[idx] : (sIdx === state.sets.length && state.winner === null ? state.games[idx] : '');
                   const isCurSet = sIdx === state.sets.length && state.winner === null;
@@ -963,10 +1125,10 @@ export default function CourtView({ courtId, navigate }) {
                   );
                 })}
 
-                {/* GAME POINTS (0, 15, 30, 40, AD) */}
-                <div className="col-span-2 sm:col-span-2 h-full py-5 bg-padel-card/90 border-l-2 border-padel-border flex items-center justify-center">
+                {/* GAME POINTS (0, 15, 30, 40, AD or Americano Total) */}
+                <div className={`${isAmericano ? 'col-span-3 sm:col-span-3' : 'col-span-2 sm:col-span-2'} h-full py-5 bg-padel-card/90 border-l-2 border-padel-border flex items-center justify-center`}>
                   <span className="font-score font-black text-4xl sm:text-5xl text-padel-volt text-glow-volt animate-score-pop">
-                    {state.winner !== null ? '' : getPointLabel(idx)}
+                    {isAmericano ? state.pts[idx] : (state.winner !== null ? '' : getPointLabel(idx))}
                   </span>
                 </div>
               </div>
@@ -1107,7 +1269,25 @@ export default function CourtView({ courtId, navigate }) {
             )}
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowTouchMode(true)}
+              className="px-3 py-1.5 rounded-xl bg-padel-card hover:bg-padel-border/60 border border-padel-border/60 text-cyan-400 hover:text-white font-semibold flex items-center gap-1.5 transition-colors"
+              title="Buka mode layar penuh untuk remote sentuh / TikTok seperti MIXIO"
+            >
+              <Smartphone className="w-3.5 h-3.5" />
+              <span>Remote TikTok</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowSignalDebugger(true)}
+              className="px-3 py-1.5 rounded-xl bg-padel-card hover:bg-padel-border/60 border border-rose-500/40 text-rose-400 hover:text-white font-semibold flex items-center gap-1.5 transition-colors"
+              title="Lihat sinyal mentah tombol remote yang sedang dipencet"
+            >
+              <Bug className="w-3.5 h-3.5" />
+              <span>🔴 Debugger Sinyal</span>
+            </button>
             <button
               type="button"
               onClick={() => {
@@ -1119,7 +1299,7 @@ export default function CourtView({ courtId, navigate }) {
               className="px-3 py-1.5 rounded-xl bg-padel-card hover:bg-padel-border/60 border border-padel-border/60 text-padel-volt hover:text-white font-semibold flex items-center gap-1.5 transition-colors"
             >
               <Settings className="w-3.5 h-3.5" />
-              <span>Atur Tombol Remote</span>
+              <span>Atur Tombol</span>
             </button>
           </div>
         </footer>
@@ -1210,39 +1390,96 @@ export default function CourtView({ courtId, navigate }) {
             </div>
 
             {/* FORMAT ATURAN SKOR */}
-            <div className="grid grid-cols-2 gap-3 pt-2 border-t border-padel-border/40">
-              <div>
-                <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1">
-                  Format Poin:
-                </label>
-                <select
-                  value={selectedMode}
-                  onChange={e => setSelectedMode(e.target.value)}
-                  className="w-full bg-padel-dark border border-padel-border/60 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-padel-volt"
-                >
-                  <option value="golden">Golden Point (Padel Standar)</option>
-                  <option value="adv">Advantage (Klasik Tenis)</option>
-                  <option value="star">Star Point (Aturan FIP)</option>
-                  <option value="americano">Americano</option>
-                </select>
+            <div className="flex flex-col gap-3 pt-2 border-t border-padel-border/40">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1">
+                    Format Poin:
+                  </label>
+                  <select
+                    value={selectedMode}
+                    onChange={e => setSelectedMode(e.target.value)}
+                    className="w-full bg-padel-dark border border-padel-border/60 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-padel-volt"
+                  >
+                    <option value="golden">Golden Point (Padel Standar)</option>
+                    <option value="adv">Advantage (Klasik Tenis)</option>
+                    <option value="star">Star Point (Aturan FIP)</option>
+                    <option value="americano">Americano / Mexicano</option>
+                  </select>
+                </div>
+
+                {selectedMode === 'americano' ? (
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1">
+                      Target Poin Americano:
+                    </label>
+                    <select
+                      value={selectedTarget}
+                      onChange={e => setSelectedTarget(Number(e.target.value))}
+                      className="w-full bg-padel-dark border border-padel-border/60 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-padel-volt"
+                    >
+                      <option value={16}>16 Poin</option>
+                      <option value={21}>21 Poin</option>
+                      <option value={24}>24 Poin (Standar)</option>
+                      <option value={32}>32 Poin</option>
+                    </select>
+                  </div>
+                ) : (
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1">
+                      Jumlah Set:
+                    </label>
+                    <select
+                      value={selectedBestOf}
+                      onChange={e => setSelectedBestOf(Number(e.target.value))}
+                      className="w-full bg-padel-dark border border-padel-border/60 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-padel-volt"
+                    >
+                      <option value={3}>Best of 3 Set</option>
+                      <option value={1}>1 Set Saja</option>
+                    </select>
+                  </div>
+                )}
               </div>
 
-              <div>
-                <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1">
-                  Jumlah Set:
-                </label>
-                <select
-                  value={selectedBestOf}
-                  onChange={e => setSelectedBestOf(Number(e.target.value))}
-                  className="w-full bg-padel-dark border border-padel-border/60 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-padel-volt"
-                >
-                  <option value={3}>Best of 3 Set</option>
-                  <option value={1}>1 Set Saja</option>
-                </select>
+              {selectedMode !== 'americano' && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1">
+                      Game per Set:
+                    </label>
+                    <select
+                      value={selectedGames}
+                      onChange={e => setSelectedGames(Number(e.target.value))}
+                      className="w-full bg-padel-dark border border-padel-border/60 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-padel-volt"
+                    >
+                      <option value={6}>6 Game (Tiebreak 6–6)</option>
+                      <option value={4}>4 Game (Set Pendek, Tiebreak 4–4)</option>
+                    </select>
+                  </div>
+
+                  <div className="pt-2 sm:pt-4">
+                    <label className={`flex items-center gap-2 text-xs font-semibold cursor-pointer select-none ${selectedBestOf === 1 ? 'opacity-40 cursor-not-allowed' : 'text-slate-200'}`}>
+                      <input
+                        type="checkbox"
+                        checked={selectedSuperTb && selectedBestOf !== 1}
+                        disabled={selectedBestOf === 1}
+                        onChange={e => setSelectedSuperTb(e.target.checked)}
+                        className="w-4 h-4 rounded text-padel-volt bg-padel-dark border-padel-border focus:ring-0"
+                      />
+                      <span>Set 3 Ganti Super TB (ke 10)</span>
+                    </label>
+                  </div>
+                </div>
+              )}
+
+              {/* HINT ATURAN DINAMIS */}
+              <div className="p-2.5 rounded-xl bg-padel-card/60 border border-padel-border/40 text-[11px] text-slate-300 leading-relaxed">
+                💡 <span className="font-semibold text-padel-volt">Aturan: </span>
+                {MODE_HINTS[selectedMode]}
               </div>
             </div>
 
-            <div className="flex flex-wrap gap-2.5 justify-end pt-3">
+            <div className="flex flex-wrap gap-2.5 justify-end pt-3 border-t border-padel-border/40">
               <button
                 type="button"
                 onClick={() => setShowMatchModal(false)}
@@ -1252,10 +1489,11 @@ export default function CourtView({ courtId, navigate }) {
               </button>
               <button
                 type="button"
-                onClick={handleSaveNamesOnly}
+                onClick={handleSaveSettingsAndNames}
                 className="px-4 py-2.5 rounded-xl bg-slate-700 hover:bg-slate-600 text-white font-score font-bold text-xs sm:text-sm tracking-wider uppercase transition-colors"
+                title="Simpan pengaturan & nama pemain tanpa mereset skor pertandingan saat ini"
               >
-                Simpan Nama Saja
+                Simpan Pengaturan & Nama
               </button>
               <button
                 type="button"
@@ -1330,6 +1568,150 @@ export default function CourtView({ courtId, navigate }) {
                   Tutup
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* FULLSCREEN TOUCH GESTURE MODE (TIKTOK / MIXIO RB-02 CLICKER) */}
+      {showTouchMode && (
+        <div
+          className="fixed inset-0 z-50 bg-black/95 flex flex-col justify-between p-4 select-none touch-none animate-fade-in"
+          onPointerDown={handleTouchPointerDown}
+          onPointerUp={handleTouchPointerUp}
+        >
+          {/* TOP BAR */}
+          <div className="flex items-center justify-between border-b border-padel-border/40 pb-3">
+            <button
+              type="button"
+              onClick={() => setShowTouchMode(false)}
+              className="px-4 py-2 rounded-xl bg-padel-card hover:bg-padel-border text-white text-xs font-semibold flex items-center gap-1.5 transition-colors"
+            >
+              ✕ Keluar Mode Gestur
+            </button>
+            <div className="text-center">
+              <span className="text-[10px] uppercase font-bold text-padel-volt tracking-wider block">Mode Remote Sentuh / TikTok</span>
+              <span className="text-xs text-slate-300">MIXIO & Clicker Gestur Aktif</span>
+            </div>
+            <button
+              type="button"
+              onClick={openMatchModal}
+              className="px-4 py-2 rounded-xl bg-padel-volt text-black text-xs font-score font-bold uppercase transition-all"
+            >
+              Atur Match
+            </button>
+          </div>
+
+          {/* COMPACT FLOATING SCOREBOARD */}
+          <div className="w-full max-w-xl mx-auto bg-padel-surface/90 border border-padel-border rounded-2xl p-4 shadow-2xl flex flex-col gap-2">
+            <div className="text-center text-xs font-score font-bold text-padel-volt uppercase tracking-wider">
+              {getStatusText(state)}
+            </div>
+            <div className="grid grid-cols-2 gap-3 text-center">
+              <div className={`p-3 rounded-xl border ${state.server === 0 ? 'border-padel-volt bg-padel-volt/10' : 'border-padel-border bg-padel-dark'}`}>
+                <div className="text-xs text-slate-400 font-semibold truncate">{cfg.names[0]}</div>
+                <div className="text-3xl font-score font-black text-white">{getPtsLabel(0, state)}</div>
+              </div>
+              <div className={`p-3 rounded-xl border ${state.server === 1 ? 'border-cyan-400 bg-cyan-400/10' : 'border-padel-border bg-padel-dark'}`}>
+                <div className="text-xs text-slate-400 font-semibold truncate">{cfg.names[1]}</div>
+                <div className="text-3xl font-score font-black text-white">{getPtsLabel(1, state)}</div>
+              </div>
+            </div>
+          </div>
+
+          {/* INTERACTIVE GESTURE PAD (MASSIVE TOUCH AREA) */}
+          <div className="flex-1 my-4 flex flex-col items-center justify-center border-2 border-dashed border-padel-border/40 rounded-3xl p-6 text-center gap-4 bg-padel-surface/20">
+            {touchFeedback ? (
+              <div className="px-6 py-3 rounded-2xl bg-padel-volt text-black font-score font-black text-xl uppercase tracking-wider shadow-lg shadow-padel-volt/30 animate-score-pop">
+                {touchFeedback}
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-3 text-slate-400">
+                <div className="w-16 h-16 rounded-full border-2 border-padel-volt/40 flex items-center justify-center animate-pulse">
+                  <span className="text-2xl">👆</span>
+                </div>
+                <span className="font-score font-black text-white text-lg uppercase tracking-wide">Area Sentuh & Gestur Remote</span>
+                <p className="text-xs text-slate-400 max-w-xs leading-relaxed">
+                  Pencet tombol remote TikTok / MIXIO kamu di sini:
+                </p>
+                <div className="grid grid-cols-2 gap-2 text-[11px] font-mono text-slate-300 bg-padel-dark/80 p-3 rounded-xl border border-padel-border/50 text-left">
+                  <div>👈 Geser Kiri: <strong>+1 {cfg.names[0]}</strong></div>
+                  <div>👉 Geser Kanan: <strong>+1 {cfg.names[1]}</strong></div>
+                  <div>👆 Geser Atas: <strong>Ganti Servis</strong></div>
+                  <div>👇 Geser Bawah: <strong>Batalkan Poin</strong></div>
+                  <div className="col-span-2 text-center text-padel-volt">❤️ Ketuk 1x: <strong>Mulai Match</strong></div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* BOTTOM QUICK FOOTER */}
+          <div className="text-center text-[11px] text-slate-500">
+            Mendeteksi gestur sentuh / pointer drag dari remote Bluetooth
+          </div>
+        </div>
+      )}
+
+      {/* DRAWER / MODAL PEREKAM SINYAL REMOTE (LIVE DEBUGGER) */}
+      {showSignalDebugger && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-fade-in">
+          <div className="w-full max-w-lg bg-padel-surface border border-rose-500/60 rounded-3xl p-6 sm:p-8 flex flex-col gap-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-padel-border/60 pb-3">
+              <div className="flex items-center gap-2">
+                <span className="w-3 h-3 rounded-full bg-rose-500 animate-ping" />
+                <h3 className="text-lg font-score font-black text-rose-400 uppercase tracking-wider">
+                  🔴 Perekam Sinyal Remote (Live Debugger)
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSignalDebugger(false)}
+                className="text-slate-400 hover:text-white text-sm font-semibold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Pencet tombol remote kamu satu per satu (Kiri, Kanan, Atas, Bawah, Hati, Kamera, Vol, dll). Semua sinyal yang masuk ke HP/Tablet langsung tercatat di bawah:
+            </p>
+
+            <div className="max-h-64 overflow-y-auto bg-padel-dark rounded-2xl p-3 border border-padel-border flex flex-col gap-2 font-mono text-xs">
+              {remoteSignals.length === 0 ? (
+                <div className="text-slate-500 text-center py-6 italic">
+                  Belum ada sinyal masuk. Silakan pencet tombol remote kamu...
+                </div>
+              ) : (
+                remoteSignals.map((sig) => (
+                  <div key={sig.id} className="p-2 rounded-lg bg-padel-card/80 border border-padel-border/50 flex items-center justify-between gap-2">
+                    <span className="text-[10px] text-slate-400 font-sans">{sig.timestamp}</span>
+                    <span className="text-rose-400 font-bold uppercase">{sig.type}</span>
+                    <span className="text-white truncate max-w-[200px]">
+                      {sig.code ? `code="${sig.code}" key="${sig.key}"` : sig.action ? `act="${sig.action}"` : JSON.stringify(sig)}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="flex items-center justify-between pt-2 border-t border-padel-border/40">
+              <button
+                type="button"
+                onClick={() => {
+                  setRemoteSignals([]);
+                  fetch(`/api/court/${courtId}/clear-log-key`, { method: 'POST' }).catch(() => {});
+                }}
+                className="px-3 py-1.5 rounded-xl bg-padel-card hover:bg-padel-border text-slate-300 text-xs font-semibold transition-colors"
+              >
+                Bersihkan Log
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowSignalDebugger(false)}
+                className="px-5 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold transition-colors"
+              >
+                Tutup
+              </button>
             </div>
           </div>
         </div>

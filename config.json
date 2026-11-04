@@ -39,7 +39,7 @@
       "cameras": [
         {
           "name": "IP-Camera",
-          "rtsp": "rtsp://admin:rifqi123@192.168.11.103:5543/b9d2be406be3dba0e3905d71bfd57201/live/channel0"
+          "rtsp": "rtsp://192.168.11.100:5543/b9d2be406be3dba0e3905d71bfd57201/live/channel0"
         }
       ],
       "names": [

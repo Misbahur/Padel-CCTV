@@ -115,10 +115,11 @@ export default function DashboardView({ navigate }) {
 
   const handleStartRec = async (cid) => {
     try {
+      const st = status[cid];
       const res = await fetch(`/api/court/${cid}/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'golden' })
+        body: JSON.stringify({ mode: st?.settings?.mode || 'golden' })
       });
       const data = await res.json();
       if (data.ok) {
@@ -413,6 +414,12 @@ export default function DashboardView({ navigate }) {
                         <span className="text-slate-400">Durasi:</span>
                         <span className="font-mono font-bold text-white">
                           {isRec ? `${Math.floor((st.elapsed || 0) / 60)}m ${(st.elapsed || 0) % 60}s` : '—'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-slate-400">Aturan Skor:</span>
+                        <span className="font-semibold text-white uppercase">
+                          {st.settings?.mode === 'americano' ? `Americano (${st.settings?.target || 24}p)` : `${st.settings?.mode || 'Golden'} (${st.settings?.bestOf || 3} Set)`}
                         </span>
                       </div>
                       <div className="flex justify-between text-xs">

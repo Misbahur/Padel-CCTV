@@ -35,6 +35,13 @@ COURT_DEFAULT = {
         "enabled": True, "position": "top-left", "scale": 1.0,
         "offset_seconds": 0.0, "preset": "veryfast", "crf": 21, "keep_original": True
     },
+    "match_rules": {
+        "mode": "golden",
+        "bestOf": 3,
+        "games": 6,
+        "superTb": False,
+        "target": 24
+    }
 }
 
 GLOBAL_DEFAULTS = {
@@ -124,6 +131,10 @@ def load_config():
         ov = dict(COURT_DEFAULT["overlay"])
         ov.update(court_cfg.get("overlay") or {})
         court_cfg["overlay"] = ov
+        # Merge match rules defaults
+        mr = dict(COURT_DEFAULT["match_rules"])
+        mr.update(court_cfg.get("match_rules") or {})
+        court_cfg["match_rules"] = mr
         court_cfg.setdefault("names", ["Tim A", "Tim B"])
 
     # Deteksi ffmpeg / ffprobe di folder project, PATH, atau WinGet
@@ -363,6 +374,13 @@ class Session:
             if self.recording:
                 return {"ok": True, "already": True}
             names = info.get("names") or self._cfg.get("names") or ["Tim A", "Tim B"]
+            # Sinkronkan format aturan pertandingan jika dikirimkan di start
+            rules = self._cfg.setdefault("match_rules", dict(COURT_DEFAULT["match_rules"]))
+            if "mode" in info:
+                rules["mode"] = info["mode"]
+            if "match_rules" in info and isinstance(info["match_rules"], dict):
+                rules.update({k: v for k, v in info["match_rules"].items() if k in ("mode", "bestOf", "games", "superTb", "target")})
+            _save_court_settings(self._cfg["id"], rules=rules, names=names)
             stamp = datetime.datetime.now()
             # Buat folder khusus per pertandingan: [YYYY-MM-DD_HH-MM-SS]_[Nama-Tim]
             folder_name = f"{stamp:%Y-%m-%d_%H-%M-%S}_{slug(names[0])}-vs-{slug(names[1])}"
@@ -391,6 +409,37 @@ class Session:
         data = {"t": round(now - self.t0, 1), "w": round(now, 3), **data}
         with open(self.events_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(data, ensure_ascii=False) + "\n")
+
+    def set_settings(self, data):
+        with self.lock:
+            rules = self._cfg.setdefault("match_rules", dict(COURT_DEFAULT["match_rules"]))
+            if "mode" in data and data["mode"] in ("golden", "adv", "star", "americano"):
+                rules["mode"] = data["mode"]
+            if "bestOf" in data:
+                try:
+                    rules["bestOf"] = int(data["bestOf"])
+                except (ValueError, TypeError):
+                    pass
+            if "games" in data:
+                try:
+                    rules["games"] = int(data["games"])
+                except (ValueError, TypeError):
+                    pass
+            if "superTb" in data:
+                rules["superTb"] = bool(data["superTb"])
+            if "target" in data:
+                try:
+                    rules["target"] = int(data["target"])
+                except (ValueError, TypeError):
+                    pass
+            clean_names = None
+            if data.get("names") and len(data["names"]) >= 2:
+                clean_names = [str(data["names"][0]).strip() or "Tim A", str(data["names"][1]).strip() or "Tim B"]
+                self._cfg["names"] = clean_names
+            _save_court_settings(self._cfg["id"], rules=rules, names=clean_names)
+            if self.recording and clean_names:
+                self._write_event({"event": "ganti_nama", "names": clean_names})
+            return {"ok": True, "settings": rules, "names": self._cfg.get("names")}
 
     def set_names(self, names):
         with self.lock:
@@ -491,6 +540,7 @@ class Session:
             "court_id": self._cfg["id"],
             "court_name": self._cfg["name"],
             "names": self._cfg.get("names", ["Tim A", "Tim B"]),
+            "settings": self._cfg.get("match_rules", COURT_DEFAULT["match_rules"]),
             "recording": self.recording,
             "renders": rq.status() if rq else [],
             "elapsed": round(time.time() - self.t0) if self.recording else 0,
@@ -606,21 +656,74 @@ def _save_cameras(court_id, cams):
             c["cameras"] = cams
 
 
-def _save_court_names(court_id, names):
-    """Tulis nama tim ke config.json untuk satu lapangan."""
+def _save_court_settings(court_id, rules=None, names=None):
+    """Tulis pengaturan pertandingan dan/atau nama tim ke config.json untuk satu lapangan."""
     raw = {}
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, encoding="utf-8") as f:
             raw = json.load(f)
     for c in raw.get("courts", []):
         if c["id"] == court_id:
-            c["names"] = names
+            if rules is not None:
+                c["match_rules"] = rules
+            if names is not None:
+                c["names"] = names
             break
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(raw, f, indent=2, ensure_ascii=False)
     for c in CFG.get("courts", []):
         if c["id"] == court_id:
-            c["names"] = names
+            if rules is not None:
+                c["match_rules"] = rules
+            if names is not None:
+                c["names"] = names
+
+
+def _save_court_names(court_id, names):
+    """Tulis nama tim ke config.json untuk satu lapangan (kompatibilitas)."""
+    _save_court_settings(court_id, names=names)
+
+
+# ── Perekam Sinyal Remote (Live Debugger) ───────────────────────────────────
+REMOTE_LOG_FILE = os.path.join(BASE, "remote_signals.log")
+_remote_signals = []
+_remote_lock = threading.Lock()
+
+
+def log_remote_signal(court_id, data):
+    entry = {
+        "court_id": court_id,
+        "timestamp": datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3],
+        **data
+    }
+    with _remote_lock:
+        _remote_signals.insert(0, entry)
+        del _remote_signals[50:]
+    try:
+        with open(REMOTE_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+    print(f"[REMOTE SIGNAL C{court_id}] {json.dumps(entry, ensure_ascii=False)}")
+    return {"ok": True}
+
+
+def get_remote_signals(court_id=None):
+    with _remote_lock:
+        if court_id is None:
+            return list(_remote_signals)
+        return [s for s in _remote_signals if s.get("court_id") == court_id]
+
+
+def clear_remote_signals():
+    with _remote_lock:
+        _remote_signals.clear()
+    try:
+        if os.path.exists(REMOTE_LOG_FILE):
+            os.remove(REMOTE_LOG_FILE)
+    except Exception:
+        pass
+    return {"ok": True}
 
 
 def add_camera(court_id, data):
@@ -933,6 +1036,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(s.start(data))
             elif action == "set-names":
                 self._json(s.set_names(data.get("names", [])))
+            elif action == "set-settings":
+                self._json(s.set_settings(data))
             elif action == "event":
                 self._json(s.event(data))
             elif action == "stop":
@@ -950,6 +1055,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(add_camera(cid, data))
             elif action == "remove-camera":
                 self._json(remove_camera(cid, data))
+            elif action == "log-key":
+                self._json(log_remote_signal(cid, data))
+            elif action == "get-log-key":
+                self._json({"signals": get_remote_signals(cid)})
+            elif action == "clear-log-key":
+                self._json(clear_remote_signals())
             else:
                 self._json({"error": "not found"}, 404)
             return
