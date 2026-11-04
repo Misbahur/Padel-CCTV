@@ -43,9 +43,16 @@
         }
       ],
       "names": [
-        "lut / Urvi",
-        "halo / hola"
-      ]
+        "msi / mis",
+        "urv / ura"
+      ],
+      "match_rules": {
+        "mode": "golden",
+        "bestOf": 1,
+        "games": 4,
+        "superTb": false,
+        "target": 24
+      }
     },
     {
       "id": 2,

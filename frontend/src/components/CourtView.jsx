@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Play, Square, RotateCcw, ArrowLeftRight, Maximize, Minimize, Users, 
-  Settings, LogOut, Radio, ChevronRight, Zap, Volume2, Shield, Clock, Video,
+  Settings, LogOut, Radio, ChevronRight, Zap, Volume2, VolumeX, Shield, Clock, Video,
   Smartphone, Bug, Heart, Lock
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
@@ -43,6 +43,179 @@ const NOUP_KEYS = new Set([
   'AudioVolumeUp', 'VolumeUp', 'AudioVolumeDown', 'VolumeDown',
   'MediaTrackPrevious', 'MediaPreviousTrack', 'MediaTrackNext', 'MediaNextTrack', 'MediaPlayPause'
 ]);
+
+// Web Audio API Synthesizer (Offline, Zero-Latency, Pure Web Audio)
+class SoundFx {
+  constructor() {
+    this.ctx = null;
+    this.enabled = true;
+  }
+
+  _getCtx() {
+    if (!this.ctx && typeof window !== 'undefined') {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) this.ctx = new AudioCtx();
+    }
+    if (this.ctx && this.ctx.state === 'suspended') {
+      this.ctx.resume().catch(() => {});
+    }
+    return this.ctx;
+  }
+
+  playTone(freq, duration = 0.12, type = 'sine', gainVal = 0.15) {
+    if (!this.enabled) return;
+    try {
+      const ctx = this._getCtx();
+      if (!ctx) return;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, ctx.currentTime);
+      gain.gain.setValueAtTime(gainVal, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + duration);
+    } catch (e) {}
+  }
+
+  pointTeamA() {
+    if (!this.enabled) return;
+    try {
+      const ctx = this._getCtx();
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(587.33, t);
+      osc.frequency.exponentialRampToValueAtTime(880, t + 0.12);
+      gain.gain.setValueAtTime(0.2, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.15);
+    } catch (e) {}
+  }
+
+  pointTeamB() {
+    if (!this.enabled) return;
+    try {
+      const ctx = this._getCtx();
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(523.25, t);
+      osc.frequency.exponentialRampToValueAtTime(783.99, t + 0.12);
+      gain.gain.setValueAtTime(0.22, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.15);
+    } catch (e) {}
+  }
+
+  undo() {
+    if (!this.enabled) return;
+    try {
+      const ctx = this._getCtx();
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(550, t);
+      osc.frequency.linearRampToValueAtTime(300, t + 0.14);
+      gain.gain.setValueAtTime(0.12, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.16);
+    } catch (e) {}
+  }
+
+  serve() {
+    this.playTone(440, 0.08, 'sine', 0.15);
+  }
+
+  bookmark() {
+    if (!this.enabled) return;
+    try {
+      const ctx = this._getCtx();
+      if (!ctx) return;
+      const notes = [523.25, 659.25, 783.99, 1046.50];
+      const startT = ctx.currentTime;
+      notes.forEach((freq, idx) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, startT + idx * 0.06);
+        gain.gain.setValueAtTime(0.16, startT + idx * 0.06);
+        gain.gain.exponentialRampToValueAtTime(0.001, startT + idx * 0.06 + 0.16);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(startT + idx * 0.06);
+        osc.stop(startT + idx * 0.06 + 0.17);
+      });
+    } catch (e) {}
+  }
+
+  gameWin() {
+    if (!this.enabled) return;
+    try {
+      const ctx = this._getCtx();
+      if (!ctx) return;
+      const notes = [523.25, 659.25, 783.99];
+      const t = ctx.currentTime;
+      notes.forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(freq, t + i * 0.08);
+        gain.gain.setValueAtTime(0.18, t + i * 0.08);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.08 + 0.22);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(t + i * 0.08);
+        osc.stop(t + i * 0.08 + 0.23);
+      });
+    } catch (e) {}
+  }
+
+  matchWin() {
+    if (!this.enabled) return;
+    try {
+      const ctx = this._getCtx();
+      if (!ctx) return;
+      const fanfare = [
+        { f: 523.25, d: 0.12, w: 0 },
+        { f: 659.25, d: 0.12, w: 0.12 },
+        { f: 783.99, d: 0.15, w: 0.24 },
+        { f: 1046.50, d: 0.45, w: 0.38 }
+      ];
+      const t0 = ctx.currentTime;
+      fanfare.forEach(({ f, d, w }) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(f, t0 + w);
+        gain.gain.setValueAtTime(0.22, t0 + w);
+        gain.gain.exponentialRampToValueAtTime(0.001, t0 + w + d);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(t0 + w);
+        osc.stop(t0 + w + d);
+      });
+    } catch (e) {}
+  }
+}
+const sfx = new SoundFx();
 
 export default function CourtView({ courtId, navigate }) {
   const [courtStatus, setCourtStatus] = useState(null);
@@ -127,6 +300,48 @@ export default function CourtView({ courtId, navigate }) {
   const [learnStep, setLearnStep] = useState(0);
   const [learnFeedback, setLearnFeedback] = useState(null);
   const [lastRemoteAction, setLastRemoteAction] = useState(null);
+
+  // Sound / Audio FX Toggle (Feature 2)
+  const [soundOn, setSoundOn] = useState(() => {
+    try {
+      return localStorage.getItem('padel.sound') !== 'false';
+    } catch (e) {
+      return true;
+    }
+  });
+
+  useEffect(() => {
+    sfx.enabled = soundOn;
+  }, [soundOn]);
+
+  // Anti-Human Error: Debounce / Throttle Remote Buttons (Feature 1)
+  const lastScoreTimeRef = useRef({ 0: 0, 1: 0, any: 0 });
+
+  // Anti-Human Error: Celebration Lock 15s (Feature 3)
+  const [celebrationLockSeconds, setCelebrationLockSeconds] = useState(0);
+  const celebrationLockRef = useRef(0);
+
+  // Anti-Human Error: Undo Grace Period 6s (Feature 5)
+  const [undoGraceSeconds, setUndoGraceSeconds] = useState(0);
+  const undoGraceRef = useRef(0);
+
+  // Countdown timer for Celebration Lock & Undo Grace Period
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const now = Date.now();
+      if (celebrationLockRef.current > 0) {
+        const rem = Math.max(0, Math.ceil((celebrationLockRef.current - now) / 1000));
+        setCelebrationLockSeconds(rem);
+        if (rem === 0) celebrationLockRef.current = 0;
+      }
+      if (undoGraceRef.current > 0) {
+        const rem = Math.max(0, Math.ceil((undoGraceRef.current - now) / 1000));
+        setUndoGraceSeconds(rem);
+        if (rem === 0) undoGraceRef.current = 0;
+      }
+    }, 250);
+    return () => clearInterval(timer);
+  }, []);
 
   const showLearnModalRef = useRef(false);
   const learnStepRef = useRef(0);
@@ -233,7 +448,7 @@ export default function CourtView({ courtId, navigate }) {
     setTimeout(() => setFlashMsg(null), 2000);
   };
 
-  // Winner Celebration Confetti
+  // Winner Celebration Confetti, Fanfare & Remote Lock 15s (Features 2 & 3)
   useEffect(() => {
     if (state.winner !== null) {
       confetti({
@@ -242,6 +457,9 @@ export default function CourtView({ courtId, navigate }) {
         origin: { y: 0.6 },
         colors: ['#D4FF00', '#00D8F6', '#FFFFFF', '#F59E0B']
       });
+      sfx.matchWin();
+      celebrationLockRef.current = Date.now() + 15000;
+      setCelebrationLockSeconds(15);
     }
   }, [state.winner]);
 
@@ -291,10 +509,33 @@ export default function CourtView({ courtId, navigate }) {
 
   const addPoint = (team) => {
     if (state.winner !== null) return;
+    if (celebrationLockRef.current > Date.now()) {
+      const rem = Math.ceil((celebrationLockRef.current - Date.now()) / 1000);
+      triggerFlash(`🔒 Remote Terkunci: ${rem}s (Perayaan Selesai)`);
+      return;
+    }
+
+    // Anti-Human Error: Debounce / Throttle (Feature 1)
+    const now = performance.now();
+    if (now - lastScoreTimeRef.current[team] < 550 || now - lastScoreTimeRef.current.any < 350) {
+      triggerFlash('⚡ Ketukan cepat diabaikan (Anti Double-Click)');
+      return;
+    }
+    lastScoreTimeRef.current[team] = now;
+    lastScoreTimeRef.current.any = now;
+
     if (!state.started) {
       startMatch();
       return;
     }
+
+    // Audio Feedback (Feature 2)
+    if (team === 0) sfx.pointTeamA();
+    else sfx.pointTeamB();
+
+    // Undo Grace Period (Feature 5): 6 detik
+    setUndoGraceSeconds(6);
+    undoGraceRef.current = Date.now() + 6000;
 
     const s = { ...state, pts: [...state.pts], games: [...state.games], setsWon: [...state.setsWon], sets: [...state.sets] };
     const opp = 1 - team;
@@ -307,6 +548,9 @@ export default function CourtView({ courtId, navigate }) {
       if (s.total % 4 === 0) s.server = 1 - s.server;
       if (s.total >= cfg.target) {
         s.winner = s.pts[0] === s.pts[1] ? 2 : (s.pts[0] > s.pts[1] ? 0 : 1);
+        sfx.matchWin();
+        celebrationLockRef.current = Date.now() + 15000;
+        setCelebrationLockSeconds(15);
       }
       setState(s);
       sendEvent('poin', { tim: cfg.names[team] }, s);
@@ -327,6 +571,9 @@ export default function CourtView({ courtId, navigate }) {
           s.stb = false;
           s.pts = [0, 0];
           s.winner = team;
+          sfx.matchWin();
+          celebrationLockRef.current = Date.now() + 15000;
+          setCelebrationLockSeconds(15);
         } else {
           s.games[team]++;
           s.tb = false;
@@ -381,8 +628,10 @@ export default function CourtView({ courtId, navigate }) {
     } else if (s.games[0] === G && s.games[1] === G) {
       s.tb = true;
       s.tbStart = s.server;
+      sfx.gameWin();
       triggerFlash('TIEBREAK!');
     } else {
+      sfx.gameWin();
       triggerFlash(`GAME · ${cfg.names[team]}`);
     }
   };
@@ -395,11 +644,15 @@ export default function CourtView({ courtId, navigate }) {
 
     if (s.setsWon[team] >= need) {
       s.winner = team;
+      sfx.matchWin();
+      celebrationLockRef.current = Date.now() + 15000;
+      setCelebrationLockSeconds(15);
       triggerFlash(`PEMENANG: ${cfg.names[team]}`);
       finishMatch();
       return;
     }
 
+    sfx.gameWin();
     triggerFlash(`SET · ${cfg.names[team]}`);
     if (cfg.superTb && s.setsWon[0] === need - 1 && s.setsWon[1] === need - 1) {
       s.stb = true;
@@ -558,11 +811,15 @@ export default function CourtView({ courtId, navigate }) {
     const prev = JSON.parse(history[history.length - 1]);
     setHistory(h => h.slice(0, -1));
     setState(prev);
-    triggerFlash('Poin Dibatalkan');
+    sfx.undo();
+    undoGraceRef.current = 0;
+    setUndoGraceSeconds(0);
+    triggerFlash('Poin Dibatalkan (Undo)');
     sendEvent('batal', {}, prev);
   };
 
   const swapServe = () => {
+    sfx.serve();
     setState(prev => {
       const next = { ...prev, server: 1 - prev.server };
       sendEvent('servis', {}, next);
@@ -572,6 +829,7 @@ export default function CourtView({ courtId, navigate }) {
 
   // Penanda Waktu Momen Klip (Love ❤️ / Bookmark)
   const handleBookmark = () => {
+    sfx.bookmark();
     const elapsedSec = courtStatus?.elapsed || 0;
     const timeStr = `${Math.floor(elapsedSec / 60)}:${String(elapsedSec % 60).padStart(2, '0')}`;
     const score = getMatchSummary(state);
@@ -713,6 +971,13 @@ export default function CourtView({ courtId, navigate }) {
     };
 
     const doAct = (act) => {
+      if (celebrationLockRef.current > Date.now()) {
+        if (act === 'a' || act === 'b' || act === 'start') {
+          const rem = Math.ceil((celebrationLockRef.current - Date.now()) / 1000);
+          triggerFlash(`🔒 Remote Terkunci: ${rem}s (Perayaan Selesai)`);
+          return;
+        }
+      }
       if (act === 'start') {
         if (!state.started) startMatch();
       } else if (act === 'a') {
@@ -954,6 +1219,13 @@ export default function CourtView({ courtId, navigate }) {
 
     logSignal('pointer', { dx: Math.round(dx), dy: Math.round(dy), dt: Math.round(dt) });
 
+    if (celebrationLockRef.current > Date.now()) {
+      const rem = Math.ceil((celebrationLockRef.current - Date.now()) / 1000);
+      setTouchFeedback(`🔒 Remote Terkunci: ${rem}s`);
+      setTimeout(() => setTouchFeedback(null), 1200);
+      return;
+    }
+
     if (Math.abs(dx) < th && Math.abs(dy) < th) {
       if (dt < 700) {
         setTouchFeedback('Ketuk → Mulai Pertandingan');
@@ -1026,6 +1298,26 @@ export default function CourtView({ courtId, navigate }) {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* SOUND TOGGLE (FEATURE 2) */}
+          <button
+            type="button"
+            onClick={() => {
+              const next = !soundOn;
+              setSoundOn(next);
+              try { localStorage.setItem('padel.sound', String(next)); } catch (e) {}
+              sfx.enabled = next;
+              if (next) sfx.serve();
+            }}
+            className={`p-2 rounded-xl border text-xs font-semibold transition-colors flex items-center gap-1.5 ${
+              soundOn
+                ? 'bg-padel-card text-padel-volt border-padel-border/60 hover:bg-padel-border/60'
+                : 'bg-padel-card text-slate-500 border-padel-border/40 hover:text-slate-300'
+            }`}
+            title={soundOn ? 'Efek Suara TV Aktif (Klik untuk Senyap)' : 'Efek Suara TV Senyap (Klik untuk Bunyikan)'}
+          >
+            {soundOn ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+            <span className="hidden sm:inline text-[11px] font-score">{soundOn ? 'Suara ON' : 'Mute'}</span>
+          </button>
           <button
             onClick={openMatchModal}
             className="px-3.5 py-1.5 rounded-xl bg-padel-card hover:bg-padel-border/60 border border-padel-border/60 text-xs font-semibold text-padel-volt flex items-center gap-1.5 transition-colors"
@@ -1063,6 +1355,28 @@ export default function CourtView({ courtId, navigate }) {
             </span>
             <span className="text-padel-volt font-black animate-pulse">{getStatusBanner()}</span>
           </div>
+
+          {/* CELEBRATION LOCK BANNER (FEATURE 3) */}
+          {celebrationLockSeconds > 0 && (
+            <div className="bg-gradient-to-r from-amber-500/30 via-yellow-500/20 to-amber-500/30 border-b border-amber-400/50 px-6 py-3 flex items-center justify-between text-xs font-bold text-amber-200 animate-pulse shadow-lg">
+              <div className="flex items-center gap-2.5">
+                <Lock className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>
+                  🎉 Match Selesai! Remote dikunci selama <strong className="text-white font-mono text-sm">{celebrationLockSeconds}s</strong> untuk mencegah ketukan di saku/tos.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  celebrationLockRef.current = 0;
+                  setCelebrationLockSeconds(0);
+                }}
+                className="px-3 py-1 rounded-lg bg-amber-600/80 hover:bg-amber-500 text-white font-score uppercase tracking-wider text-[11px] shadow transition-colors"
+              >
+                Buka Kunci
+              </button>
+            </div>
+          )}
 
           {/* COUNTDOWN STOPPING BANNER */}
           {courtStatus?.stopping_in != null && (
@@ -1204,12 +1518,20 @@ export default function CourtView({ courtId, navigate }) {
 
             {/* SECONDARY CONTROLS */}
             <div className="flex flex-wrap gap-2.5 justify-center items-center">
+              {/* TOMBOL UNDO DENGAN GRACE PERIOD HIGHLIGHT (FEATURE 5) */}
               <button
+                type="button"
                 onClick={undoPoint}
-                className="px-4 py-2.5 rounded-xl bg-padel-surface hover:bg-padel-card border border-padel-border/60 text-xs font-semibold text-slate-300 hover:text-white flex items-center gap-1.5 transition-colors"
+                disabled={history.length === 0}
+                className={`px-4 py-2.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                  undoGraceSeconds > 0
+                    ? 'bg-amber-500/25 border-amber-400 text-amber-200 shadow-lg shadow-amber-500/25 animate-pulse font-bold scale-105'
+                    : 'bg-padel-surface hover:bg-padel-card border-padel-border/60 text-slate-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed'
+                }`}
+                title="Batalkan poin terakhir jika salah pencet remote"
               >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span>Batalkan Poin</span>
+                <RotateCcw className={`w-3.5 h-3.5 ${undoGraceSeconds > 0 ? 'text-amber-400' : ''}`} />
+                <span>Batalkan Poin {undoGraceSeconds > 0 ? `(${undoGraceSeconds}s)` : ''}</span>
               </button>
               <button
                 onClick={swapServe}
@@ -1738,6 +2060,18 @@ export default function CourtView({ courtId, navigate }) {
                   <div>👇 Geser Bawah: <strong>Batalkan Poin</strong></div>
                   <div className="col-span-2 text-center text-padel-volt">❤️ Ketuk 1x: <strong>Mulai Match</strong></div>
                 </div>
+                {undoGraceSeconds > 0 && (
+                  <div className="w-full max-w-xs p-2.5 rounded-xl bg-amber-500/25 border border-amber-400 text-amber-200 text-xs font-bold animate-pulse text-center flex items-center justify-center gap-1.5 shadow-lg">
+                    <RotateCcw className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span>Salah poin? Geser Bawah (👇) untuk batal ({undoGraceSeconds}s)</span>
+                  </div>
+                )}
+                {celebrationLockSeconds > 0 && (
+                  <div className="w-full max-w-xs p-2.5 rounded-xl bg-amber-500/25 border border-amber-400 text-amber-200 text-xs font-bold animate-pulse text-center flex items-center justify-center gap-1.5 shadow-lg">
+                    <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span>Remote Terkunci Pasca Match ({celebrationLockSeconds}s)</span>
+                  </div>
+                )}
               </div>
             )}
           </div>
