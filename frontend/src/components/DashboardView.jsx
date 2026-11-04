@@ -1,8 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Tv, Camera, Video, Settings, LogOut, Users, Play, Square, 
-  RefreshCw, CheckCircle2, AlertTriangle, Shield, Eye, Plus, Trash2, Sliders, Clock
+  RefreshCw, CheckCircle2, AlertTriangle, Shield, Eye, Plus, Trash2, Sliders, Clock, Lock
 } from 'lucide-react';
+
+const MODE_HINTS = {
+  golden: 'Golden Point: di 40–40 (deuce), 1 poin langsung menentukan pemenang game. Standar turnamen padel.',
+  adv: 'Advantage (Klasik Tenis): di 40–40, tim harus unggul 2 poin berturut-turut untuk memenangkan game.',
+  star: 'Star Point (Aturan FIP): 2x advantage boleh dimainkan; jika deuce ketiga, 1 star point langsung penentu.',
+  americano: 'Americano / Mexicano: akumulasi total poin sampai target (misal 24). Servis berganti berkala.'
+};
 
 export default function DashboardView({ navigate }) {
   const [courtsStatus, setCourtsStatus] = useState({});
@@ -11,12 +18,17 @@ export default function DashboardView({ navigate }) {
   const [activeCamTab, setActiveCamTab] = useState(1);
   const [activeRecTab, setActiveRecTab] = useState(1);
   
-  // Modal Set Player
+  // Modal Set Player & Match Settings
   const [editPlayerModal, setEditPlayerModal] = useState(null); // court_id or null
   const [pA1, setPA1] = useState('');
   const [pA2, setPA2] = useState('');
   const [pB1, setPB1] = useState('');
   const [pB2, setPB2] = useState('');
+  const [selectedMode, setSelectedMode] = useState('golden');
+  const [selectedBestOf, setSelectedBestOf] = useState(3);
+  const [selectedGames, setSelectedGames] = useState(6);
+  const [selectedSuperTb, setSelectedSuperTb] = useState(false);
+  const [selectedTarget, setSelectedTarget] = useState(24);
 
   // Password / PIN Form
   const [newAdminPw, setNewAdminPw] = useState('');
@@ -80,7 +92,7 @@ export default function DashboardView({ navigate }) {
 
   const openPlayerModal = (cid) => {
     setEditPlayerModal(cid);
-    const cstatus = courtStatuses[cid] || {};
+    const cstatus = courtsStatus[cid] || {};
     const names = cstatus.names || ['Tim A', 'Tim B'];
     const partsA = (names[0] || '').split(' / ');
     const partsB = (names[1] || '').split(' / ');
@@ -88,34 +100,53 @@ export default function DashboardView({ navigate }) {
     setPA2(partsA[1] || '');
     setPB1(partsB[0] || '');
     setPB2(partsB[1] || '');
+    const setts = cstatus.settings || {};
+    setSelectedMode(setts.mode || 'golden');
+    setSelectedBestOf(Number(setts.bestOf) || 3);
+    setSelectedGames(Number(setts.games) || 6);
+    setSelectedSuperTb(Boolean(setts.superTb));
+    setSelectedTarget(Number(setts.target) || 24);
   };
 
-  const savePlayers = async () => {
+  const savePlayersAndSettings = async () => {
     if (!editPlayerModal) return;
     const nameA = [pA1.trim(), pA2.trim()].filter(Boolean).join(' / ') || 'Tim A';
     const nameB = [pB1.trim(), pB2.trim()].filter(Boolean).join(' / ') || 'Tim B';
+    const names = [nameA, nameB];
+    const isRec = Boolean(courtsStatus[editPlayerModal]?.recording);
 
     try {
-      const res = await fetch(`/api/court/${editPlayerModal}/set-names`, {
+      const payload = {
+        names,
+        // Proteksi Human Error: hanya kirim aturan jika match sedang tidak merekam
+        ...(isRec ? {} : {
+          mode: selectedMode,
+          bestOf: Number(selectedBestOf),
+          games: Number(selectedGames),
+          superTb: Boolean(selectedSuperTb),
+          target: Number(selectedTarget)
+        })
+      };
+      const res = await fetch(`/api/court/${editPlayerModal}/set-settings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ names: [nameA, nameB] })
+        body: JSON.stringify(payload)
       });
       const data = await res.json();
       if (data.ok) {
         setEditPlayerModal(null);
         fetchStatus();
       } else {
-        alert(data.message || 'Gagal memperbarui nama pemain');
+        alert(data.message || 'Gagal memperbarui pengaturan pertandingan');
       }
     } catch (e) {
-      alert('Gagal memperbarui nama pemain');
+      alert('Gagal memperbarui pengaturan pertandingan');
     }
   };
 
   const handleStartRec = async (cid) => {
     try {
-      const st = status[cid];
+      const st = courtsStatus[cid];
       const res = await fetch(`/api/court/${cid}/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -445,7 +476,7 @@ export default function DashboardView({ navigate }) {
                         className="py-2.5 px-3 rounded-xl bg-padel-card hover:bg-padel-border/60 border border-padel-border/60 text-xs font-semibold text-slate-200 hover:text-white flex items-center justify-center gap-1.5 transition-colors"
                       >
                         <Users className="w-3.5 h-3.5 text-padel-volt" />
-                        <span>Set Pemain</span>
+                        <span>Pemain & Aturan</span>
                       </button>
                       <a
                         href={`/court/${cid}`}
@@ -799,89 +830,218 @@ export default function DashboardView({ navigate }) {
 
       </main>
 
-      {/* MODAL SET PEMAIN LANGSUNG DARI RESEPSIONIS */}
-      {editPlayerModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
-          <div className="w-full max-w-lg bg-padel-surface border border-padel-border rounded-3xl p-6 sm:p-8 flex flex-col gap-6 shadow-2xl">
-            <div>
-              <div className="flex items-center gap-2 text-padel-volt text-xs font-bold uppercase tracking-wider">
-                <span>Resepsionis</span> · <span>Lapangan {editPlayerModal}</span>
+      {/* MODAL SET PEMAIN & FORMAT PERTANDINGAN LANGSUNG DARI RESEPSIONIS / ADMIN */}
+      {editPlayerModal && (() => {
+        const courtData = courtsStatus[editPlayerModal] || {};
+        const isRec = Boolean(courtData.recording);
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
+            <div className="w-full max-w-lg bg-padel-surface border border-padel-border rounded-3xl p-6 sm:p-8 flex flex-col gap-5 shadow-2xl max-h-[90vh] overflow-y-auto">
+              <div className="flex items-center justify-between border-b border-padel-border/60 pb-3">
+                <div>
+                  <div className="flex items-center gap-2 text-padel-volt text-xs font-bold uppercase tracking-wider">
+                    <span>Admin Resepsionis</span> · <span>Lapangan {editPlayerModal}</span>
+                  </div>
+                  <h3 className="text-xl sm:text-2xl font-score font-black text-white uppercase tracking-wide mt-1">
+                    Atur Pemain & Format Match
+                  </h3>
+                </div>
+                {isRec && (
+                  <span className="px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider bg-red-500/20 border border-red-500/40 text-red-400 flex items-center gap-1.5 animate-pulse">
+                    <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
+                    Sedang Merekam
+                  </span>
+                )}
               </div>
-              <h3 className="text-2xl font-score font-black text-white uppercase tracking-wide mt-1">
-                Atur Pemain Lapangan {editPlayerModal}
-              </h3>
-              <p className="text-xs text-slate-400 mt-1">
-                Nama yang diisi di sini akan langsung tampil di TV Lapangan dan menjadi nama video rekaman CCTV.
-              </p>
-            </div>
 
-            <div className="flex flex-col gap-5">
-              {/* TIM A */}
-              <div className="p-4 rounded-2xl bg-padel-card/60 border border-padel-border/40 flex flex-col gap-3">
-                <span className="text-xs font-score font-bold uppercase tracking-wider text-padel-volt">
-                  Tim A (Ganda)
-                </span>
-                <div className="grid grid-cols-2 gap-3">
-                  <input
-                    type="text"
-                    placeholder="Pemain 1 (mis. Budi)"
-                    value={pA1}
-                    onChange={e => setPA1(e.target.value)}
-                    className="bg-padel-dark border border-padel-border/60 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-padel-volt"
-                  />
-                  <input
-                    type="text"
-                    placeholder="Pemain 2 (mis. Andi)"
-                    value={pA2}
-                    onChange={e => setPA2(e.target.value)}
-                    className="bg-padel-dark border border-padel-border/60 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-padel-volt"
-                  />
+              {/* WARNING BANNER JIKA PERTANDINGAN SEDANG AKTIF / MEREKAM */}
+              {isRec && (
+                <div className="p-3.5 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-start gap-3 text-amber-200">
+                  <Lock className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                  <div className="text-xs leading-relaxed">
+                    <p className="font-bold text-amber-300">Format Skor Terkunci (Pertandingan Sedang Berjalan)</p>
+                    <p className="text-slate-300 mt-0.5">
+                      Mode skor, target, dan jumlah set dinonaktifkan untuk mencegah human error / rusaknya sinkronisasi skor rekaman CCTV. Nama pemain tetap dapat Anda edit jika ada typo.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* INPUT NAMA PEMAIN GANDA */}
+              <div className="flex flex-col gap-3.5">
+                {/* TIM A */}
+                <div className="p-3.5 sm:p-4 rounded-2xl bg-padel-card/60 border border-padel-border/40 flex flex-col gap-2.5">
+                  <span className="text-xs font-score font-bold uppercase tracking-wider text-padel-volt">
+                    Tim A (Ganda)
+                  </span>
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <input
+                      type="text"
+                      placeholder="Pemain 1 (mis. Budi)"
+                      value={pA1}
+                      onChange={e => setPA1(e.target.value)}
+                      className="bg-padel-dark border border-padel-border/60 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-padel-volt"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Pemain 2 (mis. Andi)"
+                      value={pA2}
+                      onChange={e => setPA2(e.target.value)}
+                      className="bg-padel-dark border border-padel-border/60 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-padel-volt"
+                    />
+                  </div>
+                </div>
+
+                {/* TIM B */}
+                <div className="p-3.5 sm:p-4 rounded-2xl bg-padel-card/60 border border-padel-border/40 flex flex-col gap-2.5">
+                  <span className="text-xs font-score font-bold uppercase tracking-wider text-cyan-400">
+                    Tim B (Ganda)
+                  </span>
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <input
+                      type="text"
+                      placeholder="Pemain 3 (mis. Reza)"
+                      value={pB1}
+                      onChange={e => setPB1(e.target.value)}
+                      className="bg-padel-dark border border-padel-border/60 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-400"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Pemain 4 (mis. Doni)"
+                      value={pB2}
+                      onChange={e => setPB2(e.target.value)}
+                      className="bg-padel-dark border border-padel-border/60 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-400"
+                    />
+                  </div>
                 </div>
               </div>
 
-              {/* TIM B */}
-              <div className="p-4 rounded-2xl bg-padel-card/60 border border-padel-border/40 flex flex-col gap-3">
-                <span className="text-xs font-score font-bold uppercase tracking-wider text-cyan-400">
-                  Tim B (Ganda)
-                </span>
-                <div className="grid grid-cols-2 gap-3">
-                  <input
-                    type="text"
-                    placeholder="Pemain 3 (mis. Reza)"
-                    value={pB1}
-                    onChange={e => setPB1(e.target.value)}
-                    className="bg-padel-dark border border-padel-border/60 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-400"
-                  />
-                  <input
-                    type="text"
-                    placeholder="Pemain 4 (mis. Doni)"
-                    value={pB2}
-                    onChange={e => setPB2(e.target.value)}
-                    className="bg-padel-dark border border-padel-border/60 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-400"
-                  />
+              {/* FORMAT ATURAN SKOR */}
+              <div className={`p-4 rounded-2xl bg-padel-card/40 border border-padel-border/50 flex flex-col gap-3 transition-opacity ${isRec ? 'opacity-65' : ''}`}>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-score font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                    {isRec ? <Lock className="w-3.5 h-3.5 text-amber-400" /> : <Sliders className="w-3.5 h-3.5 text-padel-volt" />}
+                    <span>Format & Aturan Pertandingan</span>
+                  </span>
+                  {isRec && (
+                    <span className="text-[10px] text-amber-400 font-bold uppercase tracking-wider bg-amber-400/10 px-2 py-0.5 rounded-full border border-amber-400/20">
+                      Terkunci
+                    </span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1">
+                      Format Poin:
+                    </label>
+                    <select
+                      value={selectedMode}
+                      disabled={isRec}
+                      onChange={e => setSelectedMode(e.target.value)}
+                      className="w-full bg-padel-dark border border-padel-border/60 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-padel-volt disabled:cursor-not-allowed disabled:opacity-75"
+                    >
+                      <option value="golden">Golden Point (Padel Standar)</option>
+                      <option value="adv">Advantage (Klasik Tenis)</option>
+                      <option value="star">Star Point (Aturan FIP)</option>
+                      <option value="americano">Americano / Mexicano</option>
+                    </select>
+                  </div>
+
+                  {selectedMode === 'americano' ? (
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1">
+                        Target Poin Americano:
+                      </label>
+                      <select
+                        value={selectedTarget}
+                        disabled={isRec}
+                        onChange={e => setSelectedTarget(Number(e.target.value))}
+                        className="w-full bg-padel-dark border border-padel-border/60 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-padel-volt disabled:cursor-not-allowed disabled:opacity-75"
+                      >
+                        <option value={16}>16 Poin</option>
+                        <option value={21}>21 Poin</option>
+                        <option value={24}>24 Poin (Standar)</option>
+                        <option value={32}>32 Poin</option>
+                      </select>
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1">
+                        Jumlah Set:
+                      </label>
+                      <select
+                        value={selectedBestOf}
+                        disabled={isRec}
+                        onChange={e => setSelectedBestOf(Number(e.target.value))}
+                        className="w-full bg-padel-dark border border-padel-border/60 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-padel-volt disabled:cursor-not-allowed disabled:opacity-75"
+                      >
+                        <option value={3}>Best of 3 Set</option>
+                        <option value={1}>1 Set Saja</option>
+                      </select>
+                    </div>
+                  )}
+                </div>
+
+                {selectedMode !== 'americano' && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1">
+                        Game per Set:
+                      </label>
+                      <select
+                        value={selectedGames}
+                        disabled={isRec}
+                        onChange={e => setSelectedGames(Number(e.target.value))}
+                        className="w-full bg-padel-dark border border-padel-border/60 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-padel-volt disabled:cursor-not-allowed disabled:opacity-75"
+                      >
+                        <option value={6}>6 Game (Tiebreak 6–6)</option>
+                        <option value={4}>4 Game (Set Pendek, Tiebreak 4–4)</option>
+                      </select>
+                    </div>
+
+                    <div className="pt-2 sm:pt-4">
+                      <label className={`flex items-center gap-2 text-xs font-semibold select-none ${isRec || selectedBestOf === 1 ? 'opacity-40 cursor-not-allowed' : 'text-slate-200 cursor-pointer'}`}>
+                        <input
+                          type="checkbox"
+                          checked={selectedSuperTb && selectedBestOf !== 1}
+                          disabled={isRec || selectedBestOf === 1}
+                          onChange={e => setSelectedSuperTb(e.target.checked)}
+                          className="w-4 h-4 rounded text-padel-volt bg-padel-dark border-padel-border focus:ring-0 disabled:cursor-not-allowed"
+                        />
+                        <span>Set 3 Ganti Super TB (ke 10)</span>
+                      </label>
+                    </div>
+                  </div>
+                )}
+
+                {/* HINT ATURAN DINAMIS */}
+                <div className="p-2.5 rounded-xl bg-padel-dark/70 border border-padel-border/40 text-[11px] text-slate-300 leading-relaxed">
+                  💡 <span className="font-semibold text-padel-volt">Aturan: </span>
+                  {MODE_HINTS[selectedMode]}
                 </div>
               </div>
-            </div>
 
-            <div className="flex gap-3 justify-end pt-2">
-              <button
-                type="button"
-                onClick={() => setEditPlayerModal(null)}
-                className="px-5 py-2.5 rounded-xl bg-padel-card hover:bg-padel-border/50 text-slate-300 font-semibold text-sm transition-colors"
-              >
-                Batal
-              </button>
-              <button
-                type="button"
-                onClick={savePlayers}
-                className="px-6 py-2.5 rounded-xl bg-padel-volt hover:bg-padel-voltHover text-black font-score font-black text-sm tracking-wider uppercase transition-all shadow-lg shadow-padel-volt/20"
-              >
-                Kirim ke TV Lapangan
-              </button>
+              <div className="flex gap-3 justify-end pt-2 border-t border-padel-border/40">
+                <button
+                  type="button"
+                  onClick={() => setEditPlayerModal(null)}
+                  className="px-5 py-2.5 rounded-xl bg-padel-card hover:bg-padel-border/50 text-slate-300 font-semibold text-sm transition-colors"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={savePlayersAndSettings}
+                  className="px-6 py-2.5 rounded-xl bg-padel-volt hover:bg-padel-voltHover text-black font-score font-black text-sm tracking-wider uppercase transition-all shadow-lg shadow-padel-volt/20"
+                >
+                  {isRec ? 'Simpan Perubahan Nama' : 'Simpan & Kirim ke TV'}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

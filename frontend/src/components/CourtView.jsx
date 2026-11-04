@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Play, Square, RotateCcw, ArrowLeftRight, Maximize, Minimize, Users, 
   Settings, LogOut, Radio, ChevronRight, Zap, Volume2, Shield, Clock, Video,
-  Smartphone, Bug, Heart
+  Smartphone, Bug, Heart, Lock
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -864,6 +864,8 @@ export default function CourtView({ courtId, navigate }) {
     setShowMatchModal(true);
   };
 
+  const isMatchActive = Boolean(courtStatus?.recording || state.started);
+
   const handleSaveSettingsAndNames = async () => {
     const nameA = [pA1.trim(), pA2.trim()].filter(Boolean).join(' / ') || 'Tim A';
     const nameB = [pB1.trim(), pB2.trim()].filter(Boolean).join(' / ') || 'Tim B';
@@ -871,11 +873,13 @@ export default function CourtView({ courtId, navigate }) {
     const newCfg = {
       ...cfg,
       names,
-      mode: selectedMode,
-      bestOf: Number(selectedBestOf),
-      games: Number(selectedGames),
-      superTb: Boolean(selectedSuperTb),
-      target: Number(selectedTarget)
+      ...(isMatchActive ? {} : {
+        mode: selectedMode,
+        bestOf: Number(selectedBestOf),
+        games: Number(selectedGames),
+        superTb: Boolean(selectedSuperTb),
+        target: Number(selectedTarget)
+      })
     };
     setCfg(newCfg);
     try {
@@ -884,20 +888,27 @@ export default function CourtView({ courtId, navigate }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           names,
-          mode: selectedMode,
-          bestOf: Number(selectedBestOf),
-          games: Number(selectedGames),
-          superTb: Boolean(selectedSuperTb),
-          target: Number(selectedTarget)
+          ...(isMatchActive ? {} : {
+            mode: selectedMode,
+            bestOf: Number(selectedBestOf),
+            games: Number(selectedGames),
+            superTb: Boolean(selectedSuperTb),
+            target: Number(selectedTarget)
+          })
         })
       });
-      triggerFlash('Pengaturan & Pemain Disimpan');
+      triggerFlash(isMatchActive ? 'Nama Pemain Disimpan' : 'Pengaturan & Pemain Disimpan');
       pollStatus();
     } catch (e) {}
     setShowMatchModal(false);
   };
 
   const handleStartFromModal = (quick = false) => {
+    if (isMatchActive) {
+      if (!window.confirm("⚠️ PERINGATAN: Pertandingan sedang berlangsung! Yakin ingin mereset pertandingan dan memulai ulang dari 0-0?")) {
+        return;
+      }
+    }
     let names;
     if (quick) {
       names = ['Tim A', 'Tim B'];
@@ -1351,13 +1362,13 @@ export default function CourtView({ courtId, navigate }) {
       {/* MODAL PERTANDINGAN BARU (DOUBLES / QUICK START) */}
       {showMatchModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-fade-in">
-          <div className="w-full max-w-lg bg-padel-surface border border-padel-border rounded-3xl p-6 sm:p-8 flex flex-col gap-6 shadow-2xl">
+          <div className="w-full max-w-lg bg-padel-surface border border-padel-border rounded-3xl p-6 sm:p-8 flex flex-col gap-5 shadow-2xl max-h-[90vh] overflow-y-auto">
             
-            <div className="flex items-center justify-between border-b border-padel-border/60 pb-4">
+            <div className="flex items-center justify-between border-b border-padel-border/60 pb-3">
               <div>
                 <span className="text-xs font-bold text-padel-volt uppercase tracking-wider block">Pengaturan Match</span>
-                <h3 className="text-2xl font-score font-black text-white uppercase tracking-wider">
-                  Mulai Pertandingan
+                <h3 className="text-xl sm:text-2xl font-score font-black text-white uppercase tracking-wider">
+                  {isMatchActive ? 'Atur Pemain (Match Aktif)' : 'Mulai Pertandingan'}
                 </h3>
               </div>
               <button
@@ -1368,25 +1379,42 @@ export default function CourtView({ courtId, navigate }) {
               </button>
             </div>
 
-            {/* QUICK START BUTTON */}
-            <button
-              onClick={() => handleStartFromModal(true)}
-              className="py-3.5 px-4 rounded-2xl bg-gradient-to-r from-padel-volt to-lime-400 text-black font-score font-black text-lg tracking-wider uppercase flex items-center justify-center gap-2 shadow-lg shadow-padel-volt/20 active:scale-98 transition-all"
-            >
-              <Zap className="w-5 h-5 fill-black" />
-              <span>⚡ Mulai Cepat (Tim A vs Tim B)</span>
-            </button>
+            {/* WARNING BANNER JIKA PERTANDINGAN SEDANG AKTIF / MEREKAM */}
+            {isMatchActive && (
+              <div className="p-3.5 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-start gap-3 text-amber-200">
+                <Lock className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                <div className="text-xs leading-relaxed">
+                  <p className="font-bold text-amber-300">Format Skor Terkunci (Pertandingan Sedang Berjalan)</p>
+                  <p className="text-slate-300 mt-0.5">
+                    Mode skor, target, dan jumlah set dinonaktifkan untuk mencegah human error / rusaknya sinkronisasi skor rekaman CCTV. Nama pemain tetap dapat Anda edit jika ada typo.
+                  </p>
+                </div>
+              </div>
+            )}
 
-            <div className="flex items-center gap-2 text-xs text-slate-400 uppercase tracking-widest my-[-4px]">
-              <div className="flex-1 h-px bg-padel-border/60" />
-              <span>Atau Ketik Nama Pemain Ganda</span>
-              <div className="flex-1 h-px bg-padel-border/60" />
-            </div>
+            {/* QUICK START BUTTON (Hanya jika belum mulai) */}
+            {!isMatchActive && (
+              <>
+                <button
+                  onClick={() => handleStartFromModal(true)}
+                  className="py-3.5 px-4 rounded-2xl bg-gradient-to-r from-padel-volt to-lime-400 text-black font-score font-black text-lg tracking-wider uppercase flex items-center justify-center gap-2 shadow-lg shadow-padel-volt/20 active:scale-98 transition-all"
+                >
+                  <Zap className="w-5 h-5 fill-black" />
+                  <span>⚡ Mulai Cepat (Tim A vs Tim B)</span>
+                </button>
+
+                <div className="flex items-center gap-2 text-xs text-slate-400 uppercase tracking-widest my-[-4px]">
+                  <div className="flex-1 h-px bg-padel-border/60" />
+                  <span>Atau Ketik Nama Pemain Ganda</span>
+                  <div className="flex-1 h-px bg-padel-border/60" />
+                </div>
+              </>
+            )}
 
             {/* DOUBLES INPUT */}
-            <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-3.5">
               {/* TIM A */}
-              <div className="p-4 rounded-2xl bg-padel-card/60 border border-padel-border/60 flex flex-col gap-2.5">
+              <div className="p-3.5 sm:p-4 rounded-2xl bg-padel-card/60 border border-padel-border/60 flex flex-col gap-2.5">
                 <span className="text-xs font-score font-bold uppercase tracking-wider text-padel-volt">
                   Tim A (Ganda)
                 </span>
@@ -1409,7 +1437,7 @@ export default function CourtView({ courtId, navigate }) {
               </div>
 
               {/* TIM B */}
-              <div className="p-4 rounded-2xl bg-padel-card/60 border border-padel-border/60 flex flex-col gap-2.5">
+              <div className="p-3.5 sm:p-4 rounded-2xl bg-padel-card/60 border border-padel-border/60 flex flex-col gap-2.5">
                 <span className="text-xs font-score font-bold uppercase tracking-wider text-cyan-400">
                   Tim B (Ganda)
                 </span>
@@ -1433,7 +1461,19 @@ export default function CourtView({ courtId, navigate }) {
             </div>
 
             {/* FORMAT ATURAN SKOR */}
-            <div className="flex flex-col gap-3 pt-2 border-t border-padel-border/40">
+            <div className={`flex flex-col gap-3 pt-2 border-t border-padel-border/40 transition-opacity ${isMatchActive ? 'opacity-65' : ''}`}>
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-score font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                  {isMatchActive ? <Lock className="w-3.5 h-3.5 text-amber-400" /> : null}
+                  <span>Format & Aturan Pertandingan</span>
+                </span>
+                {isMatchActive && (
+                  <span className="text-[10px] text-amber-400 font-bold uppercase tracking-wider bg-amber-400/10 px-2 py-0.5 rounded-full border border-amber-400/20">
+                    Terkunci
+                  </span>
+                )}
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1">
@@ -1441,8 +1481,9 @@ export default function CourtView({ courtId, navigate }) {
                   </label>
                   <select
                     value={selectedMode}
+                    disabled={isMatchActive}
                     onChange={e => setSelectedMode(e.target.value)}
-                    className="w-full bg-padel-dark border border-padel-border/60 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-padel-volt"
+                    className="w-full bg-padel-dark border border-padel-border/60 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-padel-volt disabled:cursor-not-allowed disabled:opacity-75"
                   >
                     <option value="golden">Golden Point (Padel Standar)</option>
                     <option value="adv">Advantage (Klasik Tenis)</option>
@@ -1458,8 +1499,9 @@ export default function CourtView({ courtId, navigate }) {
                     </label>
                     <select
                       value={selectedTarget}
+                      disabled={isMatchActive}
                       onChange={e => setSelectedTarget(Number(e.target.value))}
-                      className="w-full bg-padel-dark border border-padel-border/60 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-padel-volt"
+                      className="w-full bg-padel-dark border border-padel-border/60 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-padel-volt disabled:cursor-not-allowed disabled:opacity-75"
                     >
                       <option value={16}>16 Poin</option>
                       <option value={21}>21 Poin</option>
@@ -1474,8 +1516,9 @@ export default function CourtView({ courtId, navigate }) {
                     </label>
                     <select
                       value={selectedBestOf}
+                      disabled={isMatchActive}
                       onChange={e => setSelectedBestOf(Number(e.target.value))}
-                      className="w-full bg-padel-dark border border-padel-border/60 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-padel-volt"
+                      className="w-full bg-padel-dark border border-padel-border/60 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-padel-volt disabled:cursor-not-allowed disabled:opacity-75"
                     >
                       <option value={3}>Best of 3 Set</option>
                       <option value={1}>1 Set Saja</option>
@@ -1492,8 +1535,9 @@ export default function CourtView({ courtId, navigate }) {
                     </label>
                     <select
                       value={selectedGames}
+                      disabled={isMatchActive}
                       onChange={e => setSelectedGames(Number(e.target.value))}
-                      className="w-full bg-padel-dark border border-padel-border/60 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-padel-volt"
+                      className="w-full bg-padel-dark border border-padel-border/60 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-padel-volt disabled:cursor-not-allowed disabled:opacity-75"
                     >
                       <option value={6}>6 Game (Tiebreak 6–6)</option>
                       <option value={4}>4 Game (Set Pendek, Tiebreak 4–4)</option>
@@ -1501,13 +1545,13 @@ export default function CourtView({ courtId, navigate }) {
                   </div>
 
                   <div className="pt-2 sm:pt-4">
-                    <label className={`flex items-center gap-2 text-xs font-semibold cursor-pointer select-none ${selectedBestOf === 1 ? 'opacity-40 cursor-not-allowed' : 'text-slate-200'}`}>
+                    <label className={`flex items-center gap-2 text-xs font-semibold select-none ${isMatchActive || selectedBestOf === 1 ? 'opacity-40 cursor-not-allowed' : 'text-slate-200 cursor-pointer'}`}>
                       <input
                         type="checkbox"
                         checked={selectedSuperTb && selectedBestOf !== 1}
-                        disabled={selectedBestOf === 1}
+                        disabled={isMatchActive || selectedBestOf === 1}
                         onChange={e => setSelectedSuperTb(e.target.checked)}
-                        className="w-4 h-4 rounded text-padel-volt bg-padel-dark border-padel-border focus:ring-0"
+                        className="w-4 h-4 rounded text-padel-volt bg-padel-dark border-padel-border focus:ring-0 disabled:cursor-not-allowed"
                       />
                       <span>Set 3 Ganti Super TB (ke 10)</span>
                     </label>
@@ -1536,14 +1580,14 @@ export default function CourtView({ courtId, navigate }) {
                 className="px-4 py-2.5 rounded-xl bg-slate-700 hover:bg-slate-600 text-white font-score font-bold text-xs sm:text-sm tracking-wider uppercase transition-colors"
                 title="Simpan pengaturan & nama pemain tanpa mereset skor pertandingan saat ini"
               >
-                Simpan Pengaturan & Nama
+                {isMatchActive ? 'Simpan Nama Pemain' : 'Simpan Pengaturan & Nama'}
               </button>
               <button
                 type="button"
                 onClick={() => handleStartFromModal(false)}
                 className="px-5 py-2.5 rounded-xl bg-padel-volt hover:bg-padel-voltHover text-black font-score font-black text-xs sm:text-sm tracking-wider uppercase transition-all shadow-lg shadow-padel-volt/20"
               >
-                Mulai Pertandingan Baru
+                {isMatchActive ? 'Mulai Ulang Pertandingan' : 'Mulai Pertandingan Baru'}
               </button>
             </div>
           </div>

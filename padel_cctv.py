@@ -415,25 +415,27 @@ class Session:
     def set_settings(self, data):
         with self.lock:
             rules = self._cfg.setdefault("match_rules", dict(COURT_DEFAULT["match_rules"]))
-            if "mode" in data and data["mode"] in ("golden", "adv", "star", "americano"):
-                rules["mode"] = data["mode"]
-            if "bestOf" in data:
-                try:
-                    rules["bestOf"] = int(data["bestOf"])
-                except (ValueError, TypeError):
-                    pass
-            if "games" in data:
-                try:
-                    rules["games"] = int(data["games"])
-                except (ValueError, TypeError):
-                    pass
-            if "superTb" in data:
-                rules["superTb"] = bool(data["superTb"])
-            if "target" in data:
-                try:
-                    rules["target"] = int(data["target"])
-                except (ValueError, TypeError):
-                    pass
+            # Proteksi Human Error: Aturan format pertandingan tidak boleh diubah saat pertandingan sedang merekam
+            if not self.recording:
+                if "mode" in data and data["mode"] in ("golden", "adv", "star", "americano"):
+                    rules["mode"] = data["mode"]
+                if "bestOf" in data:
+                    try:
+                        rules["bestOf"] = int(data["bestOf"])
+                    except (ValueError, TypeError):
+                        pass
+                if "games" in data:
+                    try:
+                        rules["games"] = int(data["games"])
+                    except (ValueError, TypeError):
+                        pass
+                if "superTb" in data:
+                    rules["superTb"] = bool(data["superTb"])
+                if "target" in data:
+                    try:
+                        rules["target"] = int(data["target"])
+                    except (ValueError, TypeError):
+                        pass
             clean_names = None
             if data.get("names") and len(data["names"]) >= 2:
                 clean_names = [str(data["names"][0]).strip() or "Tim A", str(data["names"][1]).strip() or "Tim B"]
@@ -441,7 +443,7 @@ class Session:
             _save_court_settings(self._cfg["id"], rules=rules, names=clean_names)
             if self.recording and clean_names:
                 self._write_event({"event": "ganti_nama", "names": clean_names})
-            return {"ok": True, "settings": rules, "names": self._cfg.get("names")}
+            return {"ok": True, "settings": rules, "names": self._cfg.get("names"), "locked": self.recording}
 
     def set_names(self, names):
         with self.lock:
