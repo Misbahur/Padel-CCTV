@@ -412,6 +412,22 @@ export default function CourtView({ courtId, navigate }) {
           target: data.settings.target || prev.target || 24,
         }));
       }
+      // Server State Synchronization (Feature 4 - Auto-Recovery)
+      if (data.match_state && typeof data.match_state === 'object' && data.match_state.started) {
+        setState(prev => {
+          if (!prev.started) {
+            return data.match_state;
+          }
+          if (data.recording) {
+            const srvSummary = getMatchSummary(data.match_state);
+            const locSummary = getMatchSummary(prev);
+            if (srvSummary !== locSummary) {
+              return data.match_state;
+            }
+          }
+          return prev;
+        });
+      }
     } catch (e) {
       console.error(e);
     }
@@ -751,6 +767,7 @@ export default function CourtView({ courtId, navigate }) {
           event: ev,
           skor: getMatchSummary(s, currentCfg),
           board: snap,
+          state: s,
           ...extra
         })
       });
@@ -828,15 +845,31 @@ export default function CourtView({ courtId, navigate }) {
   };
 
   // Penanda Waktu Momen Klip (Love ❤️ / Bookmark)
-  const handleBookmark = () => {
+  const handleBookmark = async () => {
     sfx.bookmark();
+    if (!courtStatus?.recording) {
+      triggerFlash('⚠️ Rekaman CCTV belum aktif (Momen klip hanya saat rekam)');
+      return;
+    }
     const elapsedSec = courtStatus?.elapsed || 0;
     const timeStr = `${Math.floor(elapsedSec / 60)}:${String(elapsedSec % 60).padStart(2, '0')}`;
     const score = getMatchSummary(state);
+
+    // Optimistic UI update: langsung tambahkan ke list bookmarks lokal agar badge langsung bertambah
+    setCourtStatus(prev => {
+      if (!prev) return prev;
+      const curBms = prev.bookmarks || [];
+      return {
+        ...prev,
+        bookmarks: [...curBms, { t: elapsedSec, time_str: timeStr, skor: score }]
+      };
+    });
+
     triggerFlash(`❤️ Momen Klip Ditandai (${timeStr})`);
     setLastRemoteAction({ key: '❤️ Love / Mark', action: 'Tandai Momen Klip', ok: true });
     logSignal('bookmark', { elapsed: elapsedSec, time: timeStr, score });
-    sendEvent('bookmark', { note: 'highlight', time: timeStr, skor: score }, state);
+    await sendEvent('bookmark', { note: 'highlight', time: timeStr, skor: score }, state);
+    pollStatus();
   };
 
   // Remote Learning Steps

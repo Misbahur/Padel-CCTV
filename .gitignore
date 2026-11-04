@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.tmp.mp4
+court_*_state.json
 
 # Node & Frontend
 node_modules/

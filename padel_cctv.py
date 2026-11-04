@@ -368,13 +368,35 @@ class Session:
         self.stop_at = 0
         self.recent = []
         self.bookmarks = []
+        self.match_state = _load_court_state(court_cfg.get("id"))
         self._render_q = None  # set externally after RenderQueue created
+
+    def _save_bookmarks_file(self, target_base=None):
+        base = target_base or self.base
+        if not base or not self.bookmarks:
+            return
+        klip_path = base + "_klip.json"
+        try:
+            payload = {
+                "court_id": self._cfg["id"],
+                "court_name": self._cfg["name"],
+                "names": self._cfg.get("names", ["Tim A", "Tim B"]),
+                "total_bookmarks": len(self.bookmarks),
+                "bookmarks": list(self.bookmarks)
+            }
+            with open(klip_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, ensure_ascii=False)
+        except OSError as e:
+            print(f"Gagal menulis file _klip.json: {e}")
 
     def start(self, info):
         with self.lock:
             if self.recording:
                 return {"ok": True, "already": True}
             self.bookmarks = []
+            if info.get("state") and isinstance(info["state"], dict):
+                self.match_state = info["state"]
+                _save_court_state(self._cfg["id"], self.match_state)
             names = info.get("names") or self._cfg.get("names") or ["Tim A", "Tim B"]
             # Sinkronkan format aturan pertandingan jika dikirimkan di start
             rules = self._cfg.setdefault("match_rules", dict(COURT_DEFAULT["match_rules"]))
@@ -460,6 +482,10 @@ class Session:
         with self.lock:
             if data.get("event") == "ganti_nama" and data.get("names"):
                 return self.set_names(data["names"])
+            # Feature 4: Simpan state skor terkini di server (tahan restart/refresh)
+            if data.get("state") and isinstance(data["state"], dict):
+                self.match_state = data["state"]
+                _save_court_state(self._cfg["id"], self.match_state)
             if self.recording:
                 if data.get("board") and data.get("event") != "papan":
                     self.has_board = True
@@ -474,9 +500,10 @@ class Session:
                         "note": data.get("note", "highlight")
                     }
                     self.bookmarks.append(bm)
-                    print(f"❤️ PENANDA MOMEN KLIP [{self._cfg['name']}]: {bm['time_str']} (Skor: {bm['skor']})")
+                    self._save_bookmarks_file()
+                    print(f"❤️ PENANDA MOMEN KLIP [{self._cfg['name']}]: #{len(self.bookmarks)} pada {bm['time_str']} (Skor: {bm['skor']})")
                 self._write_event(data)
-                return {"ok": True}
+                return {"ok": True, "bookmarks": len(self.bookmarks)}
         return {"ok": True}
 
     def schedule_stop(self, delay, summary):
@@ -539,6 +566,9 @@ class Session:
                 final.append(rel_name)
             for f in [self.events_path] + [r.log_path for r in self.recorders]:
                 moved(f)
+            # Simpan file daftar momen klip / bookmarks final
+            if self.bookmarks:
+                self._save_bookmarks_file(newbase)
             ov = self._cfg.get("overlay", {})
             if ov.get("enabled", True) and getattr(self, "has_board", False):
                 rq = self._render_q
@@ -563,6 +593,7 @@ class Session:
             "stopping_in": max(0, round(self.stop_at - time.time())) if self.stop_at else None,
             "cameras": [r.status() for r in self.recorders],
             "bookmarks": list(self.bookmarks),
+            "match_state": self.match_state,
             "recent": self.recent,
             "post_roll": self._cfg.get("post_roll_seconds", 15),
             "folder": self._cfg["output_dir"],
@@ -699,6 +730,30 @@ def _save_court_settings(court_id, rules=None, names=None):
 def _save_court_names(court_id, names):
     """Tulis nama tim ke config.json untuk satu lapangan (kompatibilitas)."""
     _save_court_settings(court_id, names=names)
+
+
+def _save_court_state(court_id, state):
+    """Menyimpan status skor pertandingan terakhir ke file json agar tahan mati lampu / restart."""
+    if not state:
+        return
+    fpath = os.path.join(BASE, f"court_{court_id}_state.json")
+    try:
+        with open(fpath, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2, ensure_ascii=False)
+    except OSError as e:
+        print(f"Gagal menyimpan court state: {e}")
+
+
+def _load_court_state(court_id):
+    """Memuat status skor pertandingan terakhir saat server mulai / restart."""
+    fpath = os.path.join(BASE, f"court_{court_id}_state.json")
+    if os.path.exists(fpath):
+        try:
+            with open(fpath, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return None
+    return None
 
 
 # ── Perekam Sinyal Remote (Live Debugger) ───────────────────────────────────
