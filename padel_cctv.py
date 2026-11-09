@@ -812,6 +812,18 @@ def _save_server_ip(server_ip):
     CFG["server_ip"] = server_ip
 
 
+def _save_clipping_settings(clip_cfg):
+    """Tulis pengaturan clipping ke config.json."""
+    raw = {}
+    if os.path.exists(CONFIG_PATH):
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            raw = json.load(f)
+    raw["clipping"] = clip_cfg
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(raw, f, indent=2, ensure_ascii=False)
+    CFG["clipping"] = clip_cfg
+
+
 def get_all_lan_ips():
     """Mendapatkan seluruh daftar IP LAN lokal yang valid (non-loopback, non-APIPA)."""
     ips = []
@@ -995,11 +1007,13 @@ def get_court_media(court_id):
                 klip_json = f
 
         total_bm = 0
+        clip_settings = None
         if klip_json:
             try:
                 with open(os.path.join(fpath, klip_json), encoding="utf-8") as kf:
                     kdata = json.load(kf)
                     total_bm = kdata.get("total_bookmarks", len(kdata.get("bookmarks", [])))
+                    clip_settings = kdata.get("clipping_settings")
                     raw_clips = kdata.get("clips", [])
                     for rc in raw_clips:
                         c_file = rc.get("file")
@@ -1057,6 +1071,7 @@ def get_court_media(court_id):
             "reels_size_mb": reel_size,
             "total_bookmarks": total_bm or len(clips),
             "clips": clips,
+            "clipping_settings": clip_settings,
             "share_path": share_path,
             "share_url": share_url,
             "qr_url": qr_url
@@ -1515,6 +1530,12 @@ class Handler(BaseHTTPRequestHandler):
                 safe_courts[cid] = {k: v for k, v in cv.items() if k != "pin_hash"}
             safe_auth["courts"] = safe_courts
             safe_cfg["auth"] = safe_auth
+            safe_cfg["clipping"] = CFG.get("clipping", {
+                "enabled": True,
+                "pre_roll_seconds": 12.0,
+                "post_roll_seconds": 4.0,
+                "create_reel": True
+            })
             self._json({"ok": True, "config": safe_cfg})
             return
 
@@ -1584,12 +1605,30 @@ class Handler(BaseHTTPRequestHandler):
                 if not sessions:
                     self._json({"error": "Tidak ada rekaman"}, 404)
                     return
-                latest = sessions[0]
-                target_video = os.path.join(s._cfg["output_dir"], latest["folder"], latest["main_video"])
+                req_folder = data.get("folder")
+                target_sess = next((x for x in sessions if x["folder"] == req_folder), None) if req_folder else sessions[0]
+                if not target_sess or not target_sess.get("main_video"):
+                    self._json({"error": "Sesi rekaman atau video tidak ditemukan"}, 404)
+                    return
+                target_video = os.path.join(s._cfg["output_dir"], target_sess["folder"], target_sess["main_video"])
                 if not os.path.isfile(target_video):
                     self._json({"error": "File video tidak ditemukan"}, 404)
                     return
-                res = clipper.create_clips_for_video(target_video, dict(CFG))
+
+                pre_roll = data.get("pre_roll")
+                post_roll = data.get("post_roll")
+                create_reel = data.get("create_reel")
+
+                pre_val = float(pre_roll) if pre_roll is not None and str(pre_roll).strip() != "" else None
+                post_val = float(post_roll) if post_roll is not None and str(post_roll).strip() != "" else None
+
+                res = clipper.create_clips_for_video(
+                    target_video,
+                    dict(CFG),
+                    pre_roll=pre_val,
+                    post_roll=post_val,
+                    create_reel=create_reel
+                )
                 self._json({"ok": True, "result": res})
             elif action == "test":
                 self._json(s.test())
@@ -1692,6 +1731,21 @@ class Handler(BaseHTTPRequestHandler):
             _save_server_ip(new_ip)
             base_url = get_base_url()
             self._json({"ok": True, "server_ip": new_ip, "base_url": base_url})
+            return
+
+        if path == "/api/admin/set-clipping":
+            sess = check_auth(self, required_role="admin")
+            if not sess:
+                self._json({"error": "unauthorized"}, 401)
+                return
+            clip_cfg = {
+                "enabled": bool(data.get("enabled", True)),
+                "pre_roll_seconds": float(data.get("pre_roll_seconds", 12.0)),
+                "post_roll_seconds": float(data.get("post_roll_seconds", 4.0)),
+                "create_reel": bool(data.get("create_reel", True))
+            }
+            _save_clipping_settings(clip_cfg)
+            self._json({"ok": True, "clipping": clip_cfg})
             return
 
         self._json({"error": "not found"}, 404)

@@ -139,15 +139,15 @@ def load_bookmarks(video_path):
     return [], None
 
 
-def create_clips_for_video(video_path, cfg=None, pre_roll=12.0, post_roll=4.0, create_reel=True, progress_cb=None):
+def create_clips_for_video(video_path, cfg=None, pre_roll=None, post_roll=None, create_reel=None, progress_cb=None):
     """
     Membuat klip-klip highlight dari video pertandingan.
     
     Argumen:
     - video_path: path ke file video MP4 (sebaiknya yang sudah ada overlay skor)
-    - cfg: konfigurasi (berisi path ffmpeg, ffprobe, dll)
-    - pre_roll: detik sebelum tombol love ditekan (default 12 detik)
-    - post_roll: detik sesudah tombol love ditekan (default 4 detik)
+    - cfg: konfigurasi (berisi path ffmpeg, ffprobe, clipping, dll)
+    - pre_roll: detik sebelum tombol love ditekan (default dari config, misal 12.0s)
+    - post_roll: detik sesudah tombol love ditekan (default dari config, misal 4.0s)
     - create_reel: jika True, menggabungkan klip menjadi 1 reel kompilasi highlight
     - progress_cb: callback fungsi progress (p: int 0..100)
     
@@ -157,6 +157,23 @@ def create_clips_for_video(video_path, cfg=None, pre_roll=12.0, post_roll=4.0, c
         raise FileNotFoundError(f"Video tidak ditemukan: {video_path}")
 
     cfg = cfg or {}
+    clip_cfg = cfg.get("clipping", {})
+    if not isinstance(clip_cfg, dict):
+        clip_cfg = {}
+
+    if pre_roll is None:
+        pre_roll = float(clip_cfg.get("pre_roll_seconds", 12.0))
+    else:
+        pre_roll = float(pre_roll)
+
+    if post_roll is None:
+        post_roll = float(clip_cfg.get("post_roll_seconds", 4.0))
+    else:
+        post_roll = float(post_roll)
+
+    if create_reel is None:
+        create_reel = bool(clip_cfg.get("create_reel", True))
+
     ffmpeg, ffprobe = find_ff_tools(cfg)
     folder = os.path.dirname(os.path.abspath(video_path))
     filename = os.path.basename(video_path)
@@ -173,7 +190,7 @@ def create_clips_for_video(video_path, cfg=None, pre_roll=12.0, post_roll=4.0, c
 
     log_path, anchor = find_log_and_anchor(video_path)
 
-    print(f"✂️ [Clipper] Memproses {len(bookmarks)} momen klip untuk: {filename}")
+    print(f"✂️ [Clipper] Memproses {len(bookmarks)} momen klip (Pre-roll: {pre_roll}s, Post-roll: {post_roll}s, Total: {pre_roll+post_roll}s) untuk: {filename}")
     cut_clips = []
     temp_concat_files = []
 
@@ -289,6 +306,11 @@ def create_clips_for_video(video_path, cfg=None, pre_roll=12.0, post_roll=4.0, c
                 data = json.load(kf)
             data["clips"] = cut_clips
             data["reel_video"] = reel_filename
+            data["clipping_settings"] = {
+                "pre_roll_seconds": pre_roll,
+                "post_roll_seconds": post_roll,
+                "duration_seconds": round(pre_roll + post_roll, 1)
+            }
             with open(klip_json_path, "w", encoding="utf-8") as kf:
                 json.dump(data, kf, indent=2, ensure_ascii=False)
         except Exception as e:

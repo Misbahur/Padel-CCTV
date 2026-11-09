@@ -67,6 +67,15 @@ export default function DashboardView({ navigate }) {
   const [serverIpMsg, setServerIpMsg] = useState(null);
   const [savingIp, setSavingIp] = useState(false);
 
+  // Pengaturan Pemotongan Klip Highlight (Love ❤️)
+  const [preRollSec, setPreRollSec] = useState(12);
+  const [postRollSec, setPostRollSec] = useState(4);
+  const [autoReel, setAutoReel] = useState(true);
+  const [clippingMsg, setClippingMsg] = useState(null);
+  const [savingClipping, setSavingClipping] = useState(false);
+  const [modalPreRoll, setModalPreRoll] = useState(12);
+  const [modalPostRoll, setModalPostRoll] = useState(4);
+
   const fetchStatus = async () => {
     try {
       const res = await fetch('/api/admin/status');
@@ -91,6 +100,19 @@ export default function DashboardView({ navigate }) {
       const data = await res.json();
       if (data.ok) {
         setConfig(data.config);
+        if (data.config?.clipping) {
+          if (data.config.clipping.pre_roll_seconds != null) {
+            setPreRollSec(Number(data.config.clipping.pre_roll_seconds));
+            setModalPreRoll(Number(data.config.clipping.pre_roll_seconds));
+          }
+          if (data.config.clipping.post_roll_seconds != null) {
+            setPostRollSec(Number(data.config.clipping.post_roll_seconds));
+            setModalPostRoll(Number(data.config.clipping.post_roll_seconds));
+          }
+          if (data.config.clipping.create_reel != null) {
+            setAutoReel(Boolean(data.config.clipping.create_reel));
+          }
+        }
       }
     } catch (e) {
       console.error(e);
@@ -202,6 +224,13 @@ export default function DashboardView({ navigate }) {
         if (data.sessions.length > 0) {
           const first = data.sessions[0];
           setSelectedMediaSession(first);
+          if (first.clipping_settings) {
+            if (first.clipping_settings.pre_roll_seconds != null) setModalPreRoll(Number(first.clipping_settings.pre_roll_seconds));
+            if (first.clipping_settings.post_roll_seconds != null) setModalPostRoll(Number(first.clipping_settings.post_roll_seconds));
+          } else {
+            setModalPreRoll(preRollSec);
+            setModalPostRoll(postRollSec);
+          }
           if (first.reels_url) setActiveMediaTab('reel');
           else if (first.clips && first.clips.length > 0) setActiveMediaTab('clips');
           else setActiveMediaTab('full');
@@ -244,15 +273,59 @@ export default function DashboardView({ navigate }) {
     }
   };
 
-  const handleTriggerClipping = async (cid) => {
+  const handleSaveClipping = async (e) => {
+    e.preventDefault();
+    setSavingClipping(true);
+    setClippingMsg(null);
+    try {
+      const res = await fetch('/api/admin/set-clipping', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pre_roll_seconds: Number(preRollSec),
+          post_roll_seconds: Number(postRollSec),
+          create_reel: Boolean(autoReel)
+        })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setClippingMsg({
+          type: 'success',
+          text: `Pengaturan Klip berhasil disimpan! (${preRollSec} detik awal + ${postRollSec} detik akhir = ${preRollSec + postRollSec} detik per klip)`
+        });
+        setModalPreRoll(Number(preRollSec));
+        setModalPostRoll(Number(postRollSec));
+        setTimeout(() => setClippingMsg(null), 5000);
+      } else {
+        setClippingMsg({ type: 'error', text: data.message || 'Gagal menyimpan pengaturan klip' });
+      }
+    } catch (err) {
+      setClippingMsg({ type: 'error', text: 'Gagal terhubung ke server' });
+    } finally {
+      setSavingClipping(false);
+    }
+  };
+
+  const handleTriggerClipping = async (cid, folder = null, customPre = null, customPost = null) => {
     if (isClipping) return;
     setIsClipping(true);
     try {
-      const res = await fetch(`/api/court/${cid}/create-clips`, { method: 'POST' });
+      const pPre = customPre != null ? Number(customPre) : modalPreRoll;
+      const pPost = customPost != null ? Number(customPost) : modalPostRoll;
+      const payload = {
+        folder: folder || selectedMediaSession?.folder,
+        pre_roll: pPre,
+        post_roll: pPost
+      };
+      const res = await fetch(`/api/court/${cid}/create-clips`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
       const data = await res.json();
       if (data.ok) {
-        alert('✂️ Pemrosesan Klip & Reels Highlights dimulai di latar belakang FFmpeg! Mohon tunggu beberapa detik lalu muat ulang daftar media.');
-        setTimeout(() => openMediaModal(cid), 3000);
+        alert(`✂️ Pemrosesan Klip dimulai dengan durasi: ${pPre}s awal + ${pPost}s akhir (Total: ${pPre + pPost}s)! Tunggu beberapa detik lalu daftar media akan dimuat ulang.`);
+        setTimeout(() => openMediaModal(cid), 4000);
       } else {
         alert(data.message || 'Gagal memproses klip');
       }
@@ -1053,6 +1126,158 @@ export default function DashboardView({ navigate }) {
           </form>
         </section>
 
+        {/* SECTION 5: PENGATURAN PEMOTONGAN KLIP HIGHLIGHT (LOVE ❤️) */}
+        <section className="bg-padel-surface/70 border border-padel-border/60 rounded-3xl p-6 sm:p-8 backdrop-blur-md">
+          <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h2 className="text-xl font-score font-bold tracking-wide uppercase text-white flex items-center gap-2">
+                <Scissors className="w-5 h-5 text-pink-400" />
+                <span>Pengaturan Pemotongan Klip Highlight (Tombol Love ❤️)</span>
+              </h2>
+              <p className="text-xs text-slate-400">
+                Atur durasi video yang dipotong sebelum dan sesudah tombol Love ❤️ pada remote Mixio ditekan
+              </p>
+            </div>
+            <span className="px-3 py-1 rounded-full bg-pink-500/20 border border-pink-500/40 text-pink-300 font-mono text-xs self-start sm:self-auto font-semibold flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5" />
+              <span>Durasi Klip: {preRollSec}s awal + {postRollSec}s akhir = {preRollSec + postRollSec} Detik</span>
+            </span>
+          </div>
+
+          {clippingMsg && (
+            <div className={`mb-4 p-3 rounded-xl border text-xs ${clippingMsg.type === 'error' ? 'bg-red-500/20 border-red-500/40 text-red-300' : 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'}`}>
+              {clippingMsg.text}
+            </div>
+          )}
+
+          <form onSubmit={handleSaveClipping} className="flex flex-col gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Detik Awal (Pre-roll) */}
+              <div className="p-4 rounded-2xl bg-padel-dark/80 border border-padel-border/60 flex flex-col gap-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+                    <span>⏪ Durasi Reli Sebelum Tombol (Awal)</span>
+                  </label>
+                  <span className="text-sm font-score font-black text-padel-volt">{preRollSec} Detik</span>
+                </div>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  Berapa detik mundur ke belakang sebelum tombol Love ditekan untuk merekam proses reli sebelum smash / poin.
+                </p>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="range"
+                    min={2}
+                    max={30}
+                    step={1}
+                    value={preRollSec}
+                    onChange={e => setPreRollSec(Number(e.target.value))}
+                    className="flex-1 accent-padel-volt cursor-pointer"
+                  />
+                  <input
+                    type="number"
+                    min={1}
+                    max={60}
+                    value={preRollSec}
+                    onChange={e => setPreRollSec(Math.max(1, Number(e.target.value)))}
+                    className="w-16 bg-padel-card border border-padel-border rounded-xl px-2 py-1 text-center text-sm font-bold text-white outline-none focus:border-padel-volt"
+                  />
+                </div>
+                {/* Preset Pills */}
+                <div className="flex items-center gap-1.5 pt-1">
+                  <span className="text-[10px] text-slate-500 font-semibold">Pilihan cepat:</span>
+                  {[5, 8, 10, 12, 15, 20].map(sec => (
+                    <button
+                      key={sec}
+                      type="button"
+                      onClick={() => setPreRollSec(sec)}
+                      className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-all ${
+                        preRollSec === sec
+                          ? 'bg-padel-volt text-black shadow-sm'
+                          : 'bg-padel-card hover:bg-padel-border/60 text-slate-300'
+                      }`}
+                    >
+                      {sec}s
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Detik Akhir (Post-roll) */}
+              <div className="p-4 rounded-2xl bg-padel-dark/80 border border-padel-border/60 flex flex-col gap-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+                    <span>⏩ Durasi Selebrasi Sesudah Tombol (Akhir)</span>
+                  </label>
+                  <span className="text-sm font-score font-black text-pink-400">{postRollSec} Detik</span>
+                </div>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  Berapa detik maju ke depan setelah tombol Love ditekan untuk merekam selebrasi pemain atau bola mati.
+                </p>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="range"
+                    min={2}
+                    max={30}
+                    step={1}
+                    value={postRollSec}
+                    onChange={e => setPostRollSec(Number(e.target.value))}
+                    className="flex-1 accent-pink-500 cursor-pointer"
+                  />
+                  <input
+                    type="number"
+                    min={1}
+                    max={60}
+                    value={postRollSec}
+                    onChange={e => setPostRollSec(Math.max(1, Number(e.target.value)))}
+                    className="w-16 bg-padel-card border border-padel-border rounded-xl px-2 py-1 text-center text-sm font-bold text-white outline-none focus:border-pink-500"
+                  />
+                </div>
+                {/* Preset Pills */}
+                <div className="flex items-center gap-1.5 pt-1">
+                  <span className="text-[10px] text-slate-500 font-semibold">Pilihan cepat:</span>
+                  {[3, 4, 5, 8, 10, 15].map(sec => (
+                    <button
+                      key={sec}
+                      type="button"
+                      onClick={() => setPostRollSec(sec)}
+                      className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-all ${
+                        postRollSec === sec
+                          ? 'bg-pink-500 text-white shadow-sm'
+                          : 'bg-padel-card hover:bg-padel-border/60 text-slate-300'
+                      }`}
+                    >
+                      {sec}s
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pt-2 border-t border-padel-border/40">
+              <label className="flex items-center gap-2.5 text-xs text-slate-300 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={autoReel}
+                  onChange={e => setAutoReel(e.target.checked)}
+                  className="w-4 h-4 rounded text-padel-volt bg-padel-dark border-padel-border focus:ring-0"
+                />
+                <span className="font-semibold text-white">
+                  Otomatis gabungkan klip menjadi 1 video Reels Highlight kompilasi MP4
+                </span>
+              </label>
+
+              <button
+                type="submit"
+                disabled={savingClipping}
+                className="px-6 py-2.5 rounded-xl bg-pink-500 hover:bg-pink-600 text-white font-score font-bold text-xs uppercase tracking-wider transition-all disabled:opacity-50 shadow-md shadow-pink-500/20 flex items-center gap-1.5 self-end sm:self-auto"
+              >
+                <Scissors className="w-3.5 h-3.5" />
+                <span>{savingClipping ? 'Menyimpan...' : 'Simpan Pengaturan Klip'}</span>
+              </button>
+            </div>
+          </form>
+        </section>
+
       </main>
 
       {/* MODAL SET PEMAIN & FORMAT PERTANDINGAN LANGSUNG DARI RESEPSIONIS / ADMIN */}
@@ -1314,49 +1539,97 @@ export default function DashboardView({ navigate }) {
             ) : (
               <>
                 {/* Session Selector & Actions */}
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-3 rounded-2xl bg-padel-dark/80 border border-padel-border/60">
-                  <div className="flex-1">
-                    <label className="text-[10px] uppercase font-score font-bold text-slate-400 tracking-wider block mb-1">
-                      Pilih Sesi Pertandingan:
-                    </label>
-                    <select
-                      value={selectedMediaSession?.folder || ''}
-                      onChange={e => {
-                        const found = mediaSessions.find(s => s.folder === e.target.value);
-                        if (found) {
-                          setSelectedMediaSession(found);
-                          if (found.reels_url) setActiveMediaTab('reel');
-                          else if (found.clips?.length) setActiveMediaTab('clips');
-                          else setActiveMediaTab('full');
-                        }
-                      }}
-                      className="w-full bg-padel-card border border-padel-border text-white text-xs rounded-xl px-3 py-2 outline-none focus:border-padel-volt"
-                    >
-                      {mediaSessions.map((s, idx) => (
-                        <option key={idx} value={s.folder}>
-                          {s.title || s.folder} ({s.date || ''})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="flex items-center gap-2 self-end sm:self-auto pt-1 sm:pt-0">
-                    <button
-                      type="button"
-                      onClick={() => handleTriggerClipping(mediaCourtId)}
-                      disabled={isClipping}
-                      className="px-3.5 py-2 rounded-xl bg-purple-600/20 hover:bg-purple-600/40 border border-purple-500/40 text-purple-300 hover:text-white text-xs font-semibold flex items-center gap-1.5 transition-all disabled:opacity-50"
-                      title="Proses ulang klip dan gabungkan jadi reels highlight"
-                    >
-                      <Scissors className={`w-3.5 h-3.5 ${isClipping ? 'animate-spin' : ''}`} />
-                      <span>{isClipping ? 'Memproses...' : 'Potong Ulang Klip'}</span>
-                    </button>
+                <div className="flex flex-col gap-3 p-3.5 rounded-2xl bg-padel-dark/80 border border-padel-border/60">
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-[10px] uppercase font-score font-bold text-slate-400 tracking-wider">
+                          Pilih Sesi Pertandingan:
+                        </label>
+                        {selectedMediaSession?.clipping_settings && (
+                          <span className="text-[10px] text-pink-300 font-mono font-semibold">
+                            ✂️ Klip saat ini: {selectedMediaSession.clipping_settings.pre_roll_seconds}s awal + {selectedMediaSession.clipping_settings.post_roll_seconds}s akhir ({selectedMediaSession.clipping_settings.duration_seconds}s)
+                          </span>
+                        )}
+                      </div>
+                      <select
+                        value={selectedMediaSession?.folder || ''}
+                        onChange={e => {
+                          const found = mediaSessions.find(s => s.folder === e.target.value);
+                          if (found) {
+                            setSelectedMediaSession(found);
+                            if (found.clipping_settings) {
+                              if (found.clipping_settings.pre_roll_seconds != null) setModalPreRoll(Number(found.clipping_settings.pre_roll_seconds));
+                              if (found.clipping_settings.post_roll_seconds != null) setModalPostRoll(Number(found.clipping_settings.post_roll_seconds));
+                            }
+                            if (found.reels_url) setActiveMediaTab('reel');
+                            else if (found.clips?.length) setActiveMediaTab('clips');
+                            else setActiveMediaTab('full');
+                          }
+                        }}
+                        className="w-full bg-padel-card border border-padel-border text-white text-xs rounded-xl px-3 py-2 outline-none focus:border-padel-volt"
+                      >
+                        {mediaSessions.map((s, idx) => (
+                          <option key={idx} value={s.folder}>
+                            {s.title || s.folder} ({s.date || ''})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                     <button
                       type="button"
                       onClick={() => openMediaModal(mediaCourtId)}
-                      className="p-2 rounded-xl bg-padel-card hover:bg-padel-border/60 text-slate-400 hover:text-white transition-colors"
+                      className="p-2 rounded-xl bg-padel-card hover:bg-padel-border/60 text-slate-400 hover:text-white transition-colors self-end sm:self-auto"
                       title="Refresh"
                     >
                       <RefreshCw className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* On-the-fly Clipping Settings Bar */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 pt-2.5 border-t border-padel-border/40 text-xs">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-slate-300 font-semibold text-[11px] flex items-center gap-1">
+                        <Scissors className="w-3.5 h-3.5 text-pink-400" /> Atur Klip:
+                      </span>
+                      <div className="flex items-center gap-1 bg-padel-card px-2.5 py-1 rounded-xl border border-padel-border/60">
+                        <span className="text-[10px] text-slate-400">Awal:</span>
+                        <input
+                          type="number"
+                          min={1}
+                          max={60}
+                          value={modalPreRoll}
+                          onChange={e => setModalPreRoll(Math.max(1, Number(e.target.value)))}
+                          className="w-10 bg-padel-dark border border-padel-border/60 rounded px-1 text-center font-bold text-padel-volt text-xs outline-none"
+                        />
+                        <span className="text-[10px] text-slate-400">s</span>
+                      </div>
+                      <div className="flex items-center gap-1 bg-padel-card px-2.5 py-1 rounded-xl border border-padel-border/60">
+                        <span className="text-[10px] text-slate-400">Akhir:</span>
+                        <input
+                          type="number"
+                          min={1}
+                          max={60}
+                          value={modalPostRoll}
+                          onChange={e => setModalPostRoll(Math.max(1, Number(e.target.value)))}
+                          className="w-10 bg-padel-dark border border-padel-border/60 rounded px-1 text-center font-bold text-pink-400 text-xs outline-none"
+                        />
+                        <span className="text-[10px] text-slate-400">s</span>
+                      </div>
+                      <span className="text-[10px] text-slate-400 font-mono">
+                        (= {modalPreRoll + modalPostRoll}s/klip)
+                      </span>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleTriggerClipping(mediaCourtId, selectedMediaSession?.folder, modalPreRoll, modalPostRoll)}
+                      disabled={isClipping}
+                      className="px-3.5 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold flex items-center gap-1.5 transition-all disabled:opacity-50 shadow-md shadow-purple-600/30"
+                      title={`Potong ulang dengan durasi ${modalPreRoll}s awal + ${modalPostRoll}s akhir`}
+                    >
+                      <Scissors className={`w-3.5 h-3.5 ${isClipping ? 'animate-spin' : ''}`} />
+                      <span>{isClipping ? 'Sedang Memotong...' : 'Potong Ulang Klip'}</span>
                     </button>
                   </div>
                 </div>

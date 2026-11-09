@@ -2465,10 +2465,17 @@ export default function CourtView({ courtId, navigate }) {
                       <h4 className="text-base sm:text-lg font-score font-bold text-white uppercase tracking-wider">
                         {selectedMediaSession.title}
                       </h4>
-                      <p className="text-xs text-slate-400 mt-0.5">
-                        {selectedMediaSession.total_bookmarks > 0 
-                          ? `❤️ ${selectedMediaSession.total_bookmarks} Momen Seru Ditandai`
-                          : 'Rekaman penuh tanpa penanda momen'}
+                      <p className="text-xs text-slate-400 mt-0.5 flex flex-wrap items-center gap-2">
+                        <span>
+                          {selectedMediaSession.total_bookmarks > 0 
+                            ? `❤️ ${selectedMediaSession.total_bookmarks} Momen Seru Ditandai`
+                            : 'Rekaman penuh tanpa penanda momen'}
+                        </span>
+                        {selectedMediaSession.clipping_settings && (
+                          <span className="text-[10px] text-pink-300 bg-pink-500/20 border border-pink-500/30 px-2 py-0.5 rounded-full font-mono">
+                            ✂️ {selectedMediaSession.clipping_settings.pre_roll_seconds}s awal + {selectedMediaSession.clipping_settings.post_roll_seconds}s akhir
+                          </span>
+                        )}
                       </p>
                     </div>
 

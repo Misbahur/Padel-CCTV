@@ -2,6 +2,12 @@
   "port": 8080,
   "ffmpeg": "ffmpeg",
   "ffprobe": "ffprobe",
+  "clipping": {
+    "enabled": true,
+    "pre_roll_seconds": 12,
+    "post_roll_seconds": 4,
+    "create_reel": true
+  },
   "auth": {
     "admin_username": "admin",
     "admin_password_hash": "240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9",
@@ -43,8 +49,8 @@
         }
       ],
       "names": [
-        "msi / mis",
-        "urv / ura"
+        "geh / heg",
+        "yuk / kuy"
       ],
       "match_rules": {
         "mode": "golden",
