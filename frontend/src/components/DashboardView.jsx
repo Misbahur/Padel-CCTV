@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Tv, Camera, Video, Settings, LogOut, Users, Play, Square, 
-  RefreshCw, CheckCircle2, AlertTriangle, Shield, Eye, Plus, Trash2, Sliders, Clock, Lock, RotateCcw
+  RefreshCw, CheckCircle2, AlertTriangle, Shield, Eye, Plus, Trash2, Sliders, Clock, Lock, RotateCcw,
+  Film, QrCode, Download, ExternalLink, Scissors, Check, Copy, Heart
 } from 'lucide-react';
 
 const MODE_HINTS = {
@@ -47,6 +48,17 @@ export default function DashboardView({ navigate }) {
   const [camMsg, setCamMsg] = useState('');
   const [camLoading, setCamLoading] = useState(false);
   const [foundCams, setFoundCams] = useState([]);
+
+  // Modal Media & Highlights (QR Share & Clips)
+  const [showMediaModal, setShowMediaModal] = useState(false);
+  const [mediaCourtId, setMediaCourtId] = useState(null);
+  const [mediaSessions, setMediaSessions] = useState([]);
+  const [selectedMediaSession, setSelectedMediaSession] = useState(null);
+  const [mediaLoading, setMediaLoading] = useState(false);
+  const [activeMediaTab, setActiveMediaTab] = useState('reel');
+  const [copiedUrl, setCopiedUrl] = useState(false);
+  const [serverBaseUrl, setServerBaseUrl] = useState('');
+  const [isClipping, setIsClipping] = useState(false);
 
   const fetchStatus = async () => {
     try {
@@ -142,6 +154,76 @@ export default function DashboardView({ navigate }) {
     } catch (e) {
       alert('Gagal memperbarui pengaturan pertandingan');
     }
+  };
+
+  const openMediaModal = async (cid) => {
+    setMediaCourtId(cid);
+    setShowMediaModal(true);
+    setMediaLoading(true);
+    try {
+      // 1. Dapatkan info IP LAN server
+      try {
+        const sysRes = await fetch('/api/system/info');
+        const sysData = await sysRes.json();
+        if (sysData.ok && sysData.server) {
+          setServerBaseUrl(`http://${sysData.server.local_ip}:${sysData.server.port}`);
+        } else {
+          setServerBaseUrl(window.location.origin);
+        }
+      } catch (_) {
+        setServerBaseUrl(window.location.origin);
+      }
+
+      // 2. Dapatkan daftar rekaman & klip lapangan
+      const res = await fetch(`/api/court/${cid}/media`);
+      const data = await res.json();
+      if (data.ok && data.sessions) {
+        setMediaSessions(data.sessions);
+        if (data.sessions.length > 0) {
+          const first = data.sessions[0];
+          setSelectedMediaSession(first);
+          if (first.reels_url) setActiveMediaTab('reel');
+          else if (first.clips && first.clips.length > 0) setActiveMediaTab('clips');
+          else setActiveMediaTab('full');
+        } else {
+          setSelectedMediaSession(null);
+        }
+      } else {
+        setMediaSessions([]);
+        setSelectedMediaSession(null);
+      }
+    } catch (e) {
+      console.error('Error fetching court media:', e);
+    } finally {
+      setMediaLoading(false);
+    }
+  };
+
+  const handleTriggerClipping = async (cid) => {
+    if (isClipping) return;
+    setIsClipping(true);
+    try {
+      const res = await fetch(`/api/court/${cid}/create-clips`, { method: 'POST' });
+      const data = await res.json();
+      if (data.ok) {
+        alert('✂️ Pemrosesan Klip & Reels Highlights dimulai di latar belakang FFmpeg! Mohon tunggu beberapa detik lalu muat ulang daftar media.');
+        setTimeout(() => openMediaModal(cid), 3000);
+      } else {
+        alert(data.message || 'Gagal memproses klip');
+      }
+    } catch (e) {
+      alert('Gagal memproses klip: ' + e.message);
+    } finally {
+      setIsClipping(false);
+    }
+  };
+
+  const copyShareLink = (url) => {
+    try {
+      navigator.clipboard.writeText(url);
+      setCopiedUrl(true);
+      setTimeout(() => setCopiedUrl(false), 2000);
+    } catch (_) {}
   };
 
   const handleStartRec = async (cid) => {
@@ -469,7 +551,7 @@ export default function DashboardView({ navigate }) {
                   </div>
 
                   {/* Card Actions */}
-                  <div className="flex flex-col gap-2.5 mt-5 pt-3.5 border-t border-padel-border/40">
+                  <div className="flex flex-col gap-2 mt-5 pt-3.5 border-t border-padel-border/40">
                     <div className="grid grid-cols-2 gap-2">
                       <button
                         onClick={() => openPlayerModal(cid)}
@@ -478,16 +560,23 @@ export default function DashboardView({ navigate }) {
                         <Users className="w-3.5 h-3.5 text-padel-volt" />
                         <span>Pemain & Aturan</span>
                       </button>
-                      <a
-                        href={`/court/${cid}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="py-2.5 px-3 rounded-xl bg-padel-card hover:bg-padel-border/60 border border-padel-border/60 text-slate-200 hover:text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+                      <button
+                        onClick={() => openMediaModal(cid)}
+                        className="py-2.5 px-3 rounded-xl bg-padel-card hover:bg-pink-500/20 border border-pink-500/30 text-xs font-semibold text-pink-300 hover:text-white flex items-center justify-center gap-1.5 transition-colors"
                       >
-                        <Eye className="w-3.5 h-3.5 text-cyan-400" />
-                        <span>Buka Papan</span>
-                      </a>
+                        <Film className="w-3.5 h-3.5 text-pink-400" />
+                        <span>Video & Klip</span>
+                      </button>
                     </div>
+                    <a
+                      href={`/court/${cid}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="w-full py-2 px-3 rounded-xl bg-padel-card hover:bg-padel-border/60 border border-padel-border/60 text-slate-200 hover:text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+                    >
+                      <Eye className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Buka Papan Skor (TV View)</span>
+                    </a>
 
                     {/* RECORDING CONTROL BUTTON */}
                     {isRec ? (
@@ -1058,6 +1147,289 @@ export default function DashboardView({ navigate }) {
           </div>
         );
       })()}
+
+      {/* MODAL VIDEO REKAMAN, KLIP & QR SHARE (ADMIN DASHBOARD) */}
+      {showMediaModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-fade-in">
+          <div className="w-full max-w-2xl max-h-[92vh] overflow-y-auto bg-padel-surface border border-padel-border rounded-3xl p-5 sm:p-7 flex flex-col gap-5 shadow-2xl">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-padel-border/60 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-pink-500/20 text-pink-400">
+                  <Film className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-score font-black text-white uppercase tracking-wider flex items-center gap-2">
+                    <span>Rekaman & Klip Lapangan {mediaCourtId}</span>
+                  </h3>
+                  <span className="text-[11px] text-slate-400">
+                    Unduh video reels highlight, klip momen ❤️, dan bagikan via QR Code
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowMediaModal(false)}
+                className="w-8 h-8 rounded-full bg-padel-card hover:bg-padel-border/60 flex items-center justify-center text-slate-400 hover:text-white transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+
+            {mediaLoading ? (
+              <div className="py-16 flex flex-col items-center justify-center gap-3 text-slate-400">
+                <RefreshCw className="w-7 h-7 animate-spin text-padel-volt" />
+                <span className="text-xs font-semibold">Memuat rekaman & klip video...</span>
+              </div>
+            ) : mediaSessions.length === 0 ? (
+              <div className="py-12 flex flex-col items-center justify-center gap-3 text-center px-4">
+                <div className="w-12 h-12 rounded-2xl bg-padel-dark border border-padel-border/80 flex items-center justify-center text-slate-500">
+                  <Film className="w-6 h-6" />
+                </div>
+                <h4 className="text-sm font-bold text-white">Belum Ada Rekaman Tersimpan</h4>
+                <p className="text-xs text-slate-400 max-w-sm">
+                  Rekaman video dan klip momen akan otomatis terpotong saat pertandingan di Lapangan {mediaCourtId} selesai direkam.
+                </p>
+              </div>
+            ) : (
+              <>
+                {/* Session Selector & Actions */}
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-3 rounded-2xl bg-padel-dark/80 border border-padel-border/60">
+                  <div className="flex-1">
+                    <label className="text-[10px] uppercase font-score font-bold text-slate-400 tracking-wider block mb-1">
+                      Pilih Sesi Pertandingan:
+                    </label>
+                    <select
+                      value={selectedMediaSession?.folder || ''}
+                      onChange={e => {
+                        const found = mediaSessions.find(s => s.folder === e.target.value);
+                        if (found) {
+                          setSelectedMediaSession(found);
+                          if (found.reels_url) setActiveMediaTab('reel');
+                          else if (found.clips?.length) setActiveMediaTab('clips');
+                          else setActiveMediaTab('full');
+                        }
+                      }}
+                      className="w-full bg-padel-card border border-padel-border text-white text-xs rounded-xl px-3 py-2 outline-none focus:border-padel-volt"
+                    >
+                      {mediaSessions.map((s, idx) => (
+                        <option key={idx} value={s.folder}>
+                          {s.title || s.folder} ({s.date || ''})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-2 self-end sm:self-auto pt-1 sm:pt-0">
+                    <button
+                      type="button"
+                      onClick={() => handleTriggerClipping(mediaCourtId)}
+                      disabled={isClipping}
+                      className="px-3.5 py-2 rounded-xl bg-purple-600/20 hover:bg-purple-600/40 border border-purple-500/40 text-purple-300 hover:text-white text-xs font-semibold flex items-center gap-1.5 transition-all disabled:opacity-50"
+                      title="Proses ulang klip dan gabungkan jadi reels highlight"
+                    >
+                      <Scissors className={`w-3.5 h-3.5 ${isClipping ? 'animate-spin' : ''}`} />
+                      <span>{isClipping ? 'Memproses...' : 'Potong Ulang Klip'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openMediaModal(mediaCourtId)}
+                      className="p-2 rounded-xl bg-padel-card hover:bg-padel-border/60 text-slate-400 hover:text-white transition-colors"
+                      title="Refresh"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* QR Code Share Card for Mobile Users */}
+                {selectedMediaSession && (() => {
+                  const sharePath = `/share/${mediaCourtId}/${selectedMediaSession.folder}`;
+                  const fullShareUrl = (serverBaseUrl || window.location.origin) + sharePath;
+                  return (
+                    <div className="p-4 rounded-2xl bg-gradient-to-r from-pink-950/20 via-padel-dark to-cyan-950/20 border border-pink-500/30 flex flex-col sm:flex-row items-center gap-4">
+                      <div className="bg-white p-2.5 rounded-2xl shrink-0 shadow-lg shadow-black/50">
+                        <img
+                          src={`/api/qr?text=${encodeURIComponent(fullShareUrl)}`}
+                          alt="QR Code Video Share"
+                          className="w-28 h-28 sm:w-32 sm:h-32 block"
+                        />
+                      </div>
+                      <div className="flex-1 flex flex-col gap-2 text-center sm:text-left">
+                        <div className="flex items-center justify-center sm:justify-start gap-1.5 text-pink-400 font-bold text-xs uppercase tracking-wider">
+                          <QrCode className="w-4 h-4" />
+                          <span>Scan QR untuk Download di HP</span>
+                        </div>
+                        <p className="text-xs text-slate-300 leading-relaxed">
+                          Pemain cukup scan QR ini dengan kamera smartphone untuk menonton dan mengunduh Reels Highlight atau Full Match tanpa login admin!
+                        </p>
+                        <div className="flex items-center justify-center sm:justify-start gap-2 pt-1">
+                          <a
+                            href={sharePath}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="px-3.5 py-1.5 rounded-xl bg-pink-500/20 hover:bg-pink-500/30 border border-pink-500/40 text-pink-300 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                            <span>Buka Halaman Share</span>
+                          </a>
+                          <button
+                            type="button"
+                            onClick={() => copyShareLink(fullShareUrl)}
+                            className="px-3.5 py-1.5 rounded-xl bg-padel-card hover:bg-padel-border/60 border border-padel-border/60 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                          >
+                            {copiedUrl ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
+                            <span>{copiedUrl ? 'Tersalin!' : 'Salin Link'}</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Media Tab Header */}
+                <div className="flex border-b border-padel-border/60 gap-2">
+                  {selectedMediaSession?.reels_url && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveMediaTab('reel')}
+                      className={`pb-2 px-3 text-xs font-bold uppercase tracking-wider border-b-2 transition-all flex items-center gap-1.5 ${
+                        activeMediaTab === 'reel'
+                          ? 'border-padel-volt text-padel-volt'
+                          : 'border-transparent text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <Film className="w-3.5 h-3.5" />
+                      <span>Reels Highlight ({selectedMediaSession.reels_size_mb} MB)</span>
+                    </button>
+                  )}
+                  {selectedMediaSession?.clips && selectedMediaSession.clips.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveMediaTab('clips')}
+                      className={`pb-2 px-3 text-xs font-bold uppercase tracking-wider border-b-2 transition-all flex items-center gap-1.5 ${
+                        activeMediaTab === 'clips'
+                          ? 'border-pink-400 text-pink-400'
+                          : 'border-transparent text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <Heart className="w-3.5 h-3.5" />
+                      <span>Klip Momen ({selectedMediaSession.clips.length})</span>
+                    </button>
+                  )}
+                  {selectedMediaSession?.main_url && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveMediaTab('full')}
+                      className={`pb-2 px-3 text-xs font-bold uppercase tracking-wider border-b-2 transition-all flex items-center gap-1.5 ${
+                        activeMediaTab === 'full'
+                          ? 'border-cyan-400 text-cyan-400'
+                          : 'border-transparent text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <Video className="w-3.5 h-3.5" />
+                      <span>Video Lengkap ({selectedMediaSession.main_size_mb} MB)</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* Tab 1: Reels Highlight */}
+                {activeMediaTab === 'reel' && selectedMediaSession?.reels_url && (
+                  <div className="flex flex-col gap-3">
+                    <video
+                      controls
+                      playsInline
+                      preload="metadata"
+                      src={selectedMediaSession.reels_url}
+                      className="w-full max-h-[300px] rounded-2xl bg-black border border-padel-border/60"
+                    />
+                    <a
+                      href={`${selectedMediaSession.reels_url}?download=1`}
+                      download
+                      className="py-3 px-4 rounded-xl bg-gradient-to-r from-padel-volt to-lime-400 text-black font-score font-bold text-sm uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg shadow-padel-volt/20 hover:brightness-105 active:scale-98 transition-all text-center"
+                    >
+                      <Download className="w-4 h-4 text-black" />
+                      <span>Unduh Reels Highlight MP4 ({selectedMediaSession.reels_size_mb} MB)</span>
+                    </a>
+                  </div>
+                )}
+
+                {/* Tab 2: Klip Momen Per Poin */}
+                {activeMediaTab === 'clips' && selectedMediaSession?.clips && (
+                  <div className="flex flex-col gap-2.5 max-h-[320px] overflow-y-auto pr-1">
+                    {selectedMediaSession.clips.map((c, idx) => (
+                      <div key={idx} className="p-3 rounded-2xl bg-padel-dark/80 border border-padel-border/60 flex flex-col sm:flex-row items-center justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <span className="w-7 h-7 rounded-full bg-pink-500/20 text-pink-300 font-bold text-xs flex items-center justify-center shrink-0">
+                            #{idx + 1}
+                          </span>
+                          <div>
+                            <span className="text-xs font-bold text-white block">
+                              Momen Menit {c.time_str || `Klip ${idx + 1}`}
+                            </span>
+                            <span className="text-[11px] text-pink-300 font-semibold">
+                              {c.skor ? `Skor: ${c.skor}` : 'Momen Seru'} · {c.duration ? `${c.duration}s` : ''} ({c.size_mb} MB)
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 w-full sm:w-auto">
+                          <a
+                            href={c.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="flex-1 sm:flex-initial py-1.5 px-3 rounded-xl bg-padel-card hover:bg-padel-border/60 border border-padel-border/60 text-xs font-semibold text-white flex items-center justify-center gap-1 transition-colors"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5 text-cyan-400" />
+                            <span>Putar</span>
+                          </a>
+                          <a
+                            href={`${c.url}?download=1`}
+                            download
+                            className="flex-1 sm:flex-initial py-1.5 px-3 rounded-xl bg-pink-500 hover:bg-pink-600 text-white text-xs font-bold flex items-center justify-center gap-1 transition-colors shadow-sm"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            <span>Unduh</span>
+                          </a>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Tab 3: Video Lengkap Pertandingan */}
+                {activeMediaTab === 'full' && selectedMediaSession?.main_url && (
+                  <div className="flex flex-col gap-3">
+                    <video
+                      controls
+                      playsInline
+                      preload="none"
+                      src={selectedMediaSession.main_url}
+                      className="w-full max-h-[300px] rounded-2xl bg-black border border-padel-border/60"
+                    />
+                    <a
+                      href={`${selectedMediaSession.main_url}?download=1`}
+                      download
+                      className="py-3 px-4 rounded-xl bg-padel-card hover:bg-padel-border/80 border border-padel-border/60 text-white font-score font-bold text-sm uppercase tracking-wider flex items-center justify-center gap-2 transition-all text-center"
+                    >
+                      <Download className="w-4 h-4 text-padel-volt" />
+                      <span>Unduh Video Lengkap MP4 ({selectedMediaSession.main_size_mb} MB)</span>
+                    </a>
+                  </div>
+                )}
+              </>
+            )}
+
+            <div className="flex justify-end pt-3 border-t border-padel-border/40">
+              <button
+                type="button"
+                onClick={() => setShowMediaModal(false)}
+                className="px-5 py-2.5 rounded-xl bg-padel-card hover:bg-padel-border/60 text-white font-semibold text-xs transition-colors"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

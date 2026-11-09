@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Padel CCTV · Highlight & Rekaman Pertandingan</title>
+  <style>
+    :root {
+      --bg: #0b1320;
+      --card: #141f32;
+      --border: #22344f;
+      --volt: #dcef3f;
+      --volt-glow: rgba(220, 239, 63, 0.25);
+      --pink: #ec4899;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      padding: 16px;
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .header {
+      text-align: center;
+      padding: 12px 0 6px 0;
+    }
+    .badge {
+      display: inline-block;
+      background: var(--volt-glow);
+      color: var(--volt);
+      border: 1px solid var(--volt);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 1px;
+      padding: 4px 12px;
+      border-radius: 9999px;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+    .title {
+      font-size: 24px;
+      font-weight: 900;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      color: #ffffff;
+    }
+    .meta {
+      font-size: 13px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.4);
+    }
+    .card-title {
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .card-title.volt { color: var(--volt); }
+    .card-title.pink { color: var(--pink); }
+    video {
+      width: 100%;
+      border-radius: 14px;
+      background: #000;
+      display: block;
+      max-height: 380px;
+    }
+    .btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      padding: 13px 18px;
+      border-radius: 14px;
+      font-size: 14px;
+      font-weight: 800;
+      text-decoration: none;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      transition: all 0.15s ease;
+      cursor: pointer;
+      border: none;
+    }
+    .btn-volt {
+      background: var(--volt);
+      color: #000000;
+      box-shadow: 0 4px 15px var(--volt-glow);
+    }
+    .btn-volt:active {
+      transform: scale(0.98);
+      background: #c8dc32;
+    }
+    .btn-outline {
+      background: rgba(255,255,255,0.06);
+      color: #ffffff;
+      border: 1px solid var(--border);
+    }
+    .btn-outline:active {
+      background: rgba(255,255,255,0.12);
+    }
+    .clip-item {
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .clip-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .pill {
+      background: rgba(236, 72, 153, 0.15);
+      color: var(--pink);
+      border: 1px solid rgba(236, 72, 153, 0.3);
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+    }
+    .footer {
+      text-align: center;
+      font-size: 11px;
+      color: var(--muted);
+      padding: 16px 0 32px 0;
+    }
+    .empty {
+      text-align: center;
+      padding: 30px 10px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .spinner {
+      border: 3px solid rgba(255,255,255,0.1);
+      border-top: 3px solid var(--volt);
+      border-radius: 50%;
+      width: 28px;
+      height: 28px;
+      animation: spin 0.8s linear infinite;
+      margin: 20px auto;
+    }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <span class="badge">🎾 Padel CCTV Playback</span>
+      <h1 class="title" id="matchTitle">Memuat Pertandingan...</h1>
+      <p class="meta" id="matchMeta">Menghubungkan ke server lokal...</p>
+    </div>
+
+    <div id="loading" class="spinner"></div>
+
+    <div id="content" style="display: none; flex-direction: column; gap: 20px;">
+      
+      <!-- REELS HIGHLIGHT CARD -->
+      <div id="reelCard" class="card" style="display: none;">
+        <div class="card-title volt">
+          <span>🔥 Reels Highlight Momen Seru</span>
+          <span id="reelSize" style="font-size: 11px; color: var(--muted);"></span>
+        </div>
+        <video id="reelPlayer" controls playsinline preload="metadata">
+          <source id="reelSource" src="" type="video/mp4">
+          Browser Anda tidak mendukung tag video.
+        </video>
+        <a id="btnDownloadReel" href="#" download class="btn btn-volt">
+          <span>⬇️ Unduh Reels Highlight</span>
+        </a>
+      </div>
+
+      <!-- INDIVIDUAL CLIPS LIST -->
+      <div id="clipsCard" class="card" style="display: none;">
+        <div class="card-title pink">
+          <span>❤️ Klip Momen Ditandai Remote</span>
+          <span id="clipsCount" class="pill">0 Klip</span>
+        </div>
+        <div id="clipsList" style="display: flex; flex-direction: column; gap: 12px;"></div>
+      </div>
+
+      <!-- FULL MATCH VIDEO CARD -->
+      <div id="fullCard" class="card" style="display: none;">
+        <div class="card-title">
+          <span>📹 Video Pertandingan Lengkap</span>
+          <span id="fullSize" style="font-size: 11px; color: var(--muted);"></span>
+        </div>
+        <video id="fullPlayer" controls playsinline preload="none">
+          <source id="fullSource" src="" type="video/mp4">
+        </video>
+        <a id="btnDownloadFull" href="#" download class="btn btn-outline">
+          <span>⬇️ Unduh Video Lengkap</span>
+        </a>
+      </div>
+
+    </div>
+
+    <div class="footer">
+      Sistem Papan Skor & CCTV Padel Multi-Lapangan<br>
+      Video tersimpan di server lokal arena
+    </div>
+  </div>
+
+  <script>
+    async function loadData() {
+      const parts = window.location.pathname.split('/').filter(Boolean);
+      // path: /share/:courtId/:folder
+      const courtId = parts[1] || '1';
+      const targetFolder = parts[2] || '';
+
+      try {
+        const res = await fetch(`/api/court/${courtId}/media`);
+        const json = await res.json();
+        const loading = document.getElementById('loading');
+        const content = document.getElementById('content');
+        loading.style.display = 'none';
+        content.style.display = 'flex';
+
+        if (!json.ok || !json.sessions || json.sessions.length === 0) {
+          document.getElementById('matchTitle').innerText = 'Belum Ada Rekaman';
+          document.getElementById('matchMeta').innerText = 'Sesi pertandingan lapangan ini belum tersedia';
+          return;
+        }
+
+        // Cari sesi yang sesuai targetFolder, atau default sesi paling baru
+        const sess = json.sessions.find(s => s.folder === targetFolder) || json.sessions[0];
+        document.getElementById('matchTitle').innerText = sess.title || 'Pertandingan Padel';
+        document.getElementById('matchMeta').innerText = `${sess.date} · Lapangan ${courtId}`;
+
+        // 1. Reel Video
+        if (sess.reels_url) {
+          document.getElementById('reelCard').style.display = 'flex';
+          document.getElementById('reelSource').src = sess.reels_url;
+          document.getElementById('reelPlayer').load();
+          document.getElementById('reelSize').innerText = sess.reels_size_mb ? `${sess.reels_size_mb} MB` : '';
+          document.getElementById('btnDownloadReel').href = sess.reels_url;
+        }
+
+        // 2. Individual Clips
+        if (sess.clips && sess.clips.length > 0) {
+          document.getElementById('clipsCard').style.display = 'flex';
+          document.getElementById('clipsCount').innerText = `${sess.clips.length} Momen`;
+          const clipsList = document.getElementById('clipsList');
+          clipsList.innerHTML = '';
+
+          sess.clips.forEach((c, idx) => {
+            const div = document.createElement('div');
+            div.className = 'clip-item';
+            div.innerHTML = `
+              <div class="clip-header">
+                <span>Momen #${idx + 1} (${c.time_str || ''})</span>
+                <span class="pill">${c.skor ? 'Skor: ' + c.skor : 'Highlight'}</span>
+              </div>
+              <video controls playsinline preload="none">
+                <source src="${c.url}" type="video/mp4">
+              </video>
+              <a href="${c.url}" download class="btn btn-outline" style="padding: 9px 14px; font-size: 12px;">
+                <span>⬇️ Unduh Klip #${idx + 1} (${c.size_mb || 0} MB)</span>
+              </a>
+            `;
+            clipsList.appendChild(div);
+          });
+        }
+
+        // 3. Full Video
+        if (sess.main_url) {
+          document.getElementById('fullCard').style.display = 'flex';
+          document.getElementById('fullSource').src = sess.main_url;
+          document.getElementById('fullPlayer').load();
+          document.getElementById('fullSize').innerText = sess.main_size_mb ? `${sess.main_size_mb} MB` : '';
+          document.getElementById('btnDownloadFull').href = sess.main_url;
+        }
+
+      } catch (err) {
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('matchTitle').innerText = 'Gagal Memuat';
+        document.getElementById('matchMeta').innerText = err.message || 'Terjadi kesalahan jaringan';
+      }
+    }
+
+    loadData();
+  </script>
+</body>
+</html>

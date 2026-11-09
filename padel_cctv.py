@@ -23,6 +23,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -354,6 +355,35 @@ class CameraRecorder:
                 "mb": round(size / 1e6, 1)}
 
 
+def _save_court_state(court_id, state):
+    """Menyimpan status skor pertandingan terakhir ke file json agar tahan mati lampu / restart."""
+    fpath = os.path.join(BASE, f"court_{court_id}_state.json")
+    if not state or not state.get("started"):
+        if os.path.exists(fpath):
+            try:
+                os.remove(fpath)
+            except OSError:
+                pass
+        return
+    try:
+        with open(fpath, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2, ensure_ascii=False)
+    except OSError as e:
+        print(f"Gagal menyimpan court state: {e}")
+
+
+def _load_court_state(court_id):
+    """Memuat status skor pertandingan terakhir saat server mulai / restart."""
+    fpath = os.path.join(BASE, f"court_{court_id}_state.json")
+    if os.path.exists(fpath):
+        try:
+            with open(fpath, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return None
+    return None
+
+
 # ── Session ──────────────────────────────────────────────────────────────────
 class Session:
     def __init__(self, court_cfg):
@@ -423,6 +453,8 @@ class Session:
             folder_name = f"{stamp:%Y-%m-%d_%H-%M-%S}_{slug(names[0])}-vs-{slug(names[1])}"
             self.match_dir = os.path.join(self._cfg["output_dir"], folder_name)
             os.makedirs(self.match_dir, exist_ok=True)
+            # Cek kapasitas harddisk sebelum rekam
+            threading.Thread(target=clean_old_recordings, daemon=True).start()
             self.base = os.path.join(
                 self.match_dir,
                 f"{stamp:%Y%m%d_%H%M%S}_{slug(names[0])}-vs-{slug(names[1])}"
@@ -588,6 +620,15 @@ class Session:
                 if rq:
                     for pth in paths:
                         rq.add(pth)
+            else:
+                if paths:
+                    def _clip_raw(p):
+                        try:
+                            import clipper
+                            clipper.create_clips_for_video(p, dict(CFG))
+                        except Exception as e:
+                            print(f"⚠️ [Clipper] Gagal memotong klip: {e}")
+                    threading.Thread(target=_clip_raw, args=(paths[0],), daemon=True).start()
             self.recent = (final + self.recent)[:8]
             self.events_path = ""
             print(f"■ SELESAI [{self._cfg['name']}]: {', '.join(final) or 'tidak ada video tersimpan'}")
@@ -677,6 +718,17 @@ class RenderQueue:
                 print(f"▶ Video dengan skor [{self._court_cfg['name']}]: {out_rel}")
                 if not merged["overlay"].get("keep_original", True):
                     os.remove(job["path"])
+
+                # Pembuatan klip highlight otomatis dari tombol Love ❤️ yang ditandai
+                try:
+                    import clipper
+                    clip_info = clipper.create_clips_for_video(out, merged)
+                    if clip_info and clip_info.get("total", 0) > 0:
+                        job["clips"] = clip_info.get("clips", [])
+                        job["reel"] = clip_info.get("reel")
+                        print(f"✨ Highlights [{self._court_cfg['name']}]: Berhasil membuat {clip_info['total']} klip & reels momen seru!")
+                except Exception as ce:
+                    print(f"⚠️ [Clipper] Gagal membuat klip highlight: {ce}")
             except Exception as e:
                 job.update(state="gagal", error=str(e)[:200])
                 print(f"✗ Gagal membuat video skor [{self._court_cfg['name']}] {job['file']}: {e}")
@@ -748,33 +800,181 @@ def _save_court_names(court_id, names):
     _save_court_settings(court_id, names=names)
 
 
-def _save_court_state(court_id, state):
-    """Menyimpan status skor pertandingan terakhir ke file json agar tahan mati lampu / restart."""
-    fpath = os.path.join(BASE, f"court_{court_id}_state.json")
-    if not state or not state.get("started"):
-        if os.path.exists(fpath):
-            try:
-                os.remove(fpath)
-            except OSError:
-                pass
-        return
+def get_local_ip():
+    """Mendapatkan alamat IP lokal (LAN) server agar bisa di-share ke HP pemain via Wi-Fi."""
     try:
-        with open(fpath, "w", encoding="utf-8") as f:
-            json.dump(state, f, indent=2, ensure_ascii=False)
-    except OSError as e:
-        print(f"Gagal menyimpan court state: {e}")
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
 
 
-def _load_court_state(court_id):
-    """Memuat status skor pertandingan terakhir saat server mulai / restart."""
-    fpath = os.path.join(BASE, f"court_{court_id}_state.json")
-    if os.path.exists(fpath):
+def clean_old_recordings(retention_days=7, min_free_gb=15.0):
+    """
+    Membersihkan rekaman CCTV lama otomatis jika:
+    1. Usia rekaman melebihi retention_days (default 7 hari)
+    2. Sisa kapasitas harddisk kurang dari min_free_gb (default 15 GB)
+    """
+    storage_cfg = CFG.get("storage", {})
+    retention_days = float(storage_cfg.get("retention_days", retention_days))
+    min_free_gb = float(storage_cfg.get("min_free_gb", min_free_gb))
+
+    base_rekaman = os.path.join(BASE, "rekaman")
+    if not os.path.isdir(base_rekaman):
+        return
+
+    now = time.time()
+    max_age_sec = retention_days * 86400
+
+    match_folders = []
+    try:
+        for root, dirs, _ in os.walk(base_rekaman):
+            for d in dirs:
+                if d.startswith("202") and ("-" in d or "_vs_" in d):
+                    d_path = os.path.join(root, d)
+                    try:
+                        mtime = os.path.getmtime(d_path)
+                        match_folders.append({"path": d_path, "name": d, "mtime": mtime})
+                    except Exception:
+                        pass
+    except Exception as e:
+        print(f"⚠️ [Cleanup] Error scan folder rekaman: {e}")
+        return
+
+    match_folders.sort(key=lambda x: x["mtime"])
+
+    # 1. Hapus yang melebihi batas hari
+    for item in list(match_folders):
+        age = now - item["mtime"]
+        if age > max_age_sec:
+            try:
+                shutil.rmtree(item["path"])
+                print(f"🧹 [Auto-Cleanup] Menghapus rekaman kedaluwarsa ({round(age/86400, 1)} hari): {item['name']}")
+                match_folders.remove(item)
+            except Exception as e:
+                print(f"⚠️ [Auto-Cleanup] Gagal menghapus {item['name']}: {e}")
+
+    # 2. Cek kapasitas harddisk
+    try:
+        total, used, free = shutil.disk_usage(base_rekaman)
+        free_gb = free / (1024 ** 3)
+    except Exception:
+        free_gb = 999.0
+
+    while free_gb < min_free_gb and match_folders:
+        oldest = match_folders.pop(0)
         try:
-            with open(fpath, encoding="utf-8") as f:
-                return json.load(f)
-        except (OSError, json.JSONDecodeError):
-            return None
-    return None
+            shutil.rmtree(oldest["path"])
+            print(f"🧹 [Auto-Cleanup Harddisk] Sisa disk {free_gb:.1f} GB (< {min_free_gb} GB). Menghapus rekaman terlama: {oldest['name']}")
+            total, used, free = shutil.disk_usage(base_rekaman)
+            free_gb = free / (1024 ** 3)
+        except Exception as e:
+            print(f"⚠️ [Auto-Cleanup] Gagal menghapus {oldest['name']}: {e}")
+            break
+
+
+def get_court_media(court_id):
+    """Mengambil daftar pertandingan yang telah selesai beserta file video & highlight."""
+    s = SESSIONS.get(court_id)
+    if not s:
+        return []
+    output_dir = s._cfg.get("output_dir")
+    if not output_dir or not os.path.isdir(output_dir):
+        return []
+
+    sessions = []
+    try:
+        entries = sorted(os.listdir(output_dir), reverse=True)
+    except OSError:
+        return []
+
+    for item in entries:
+        fpath = os.path.join(output_dir, item)
+        if not os.path.isdir(fpath) or item.startswith("_"):
+            continue
+
+        try:
+            files = os.listdir(fpath)
+        except OSError:
+            continue
+
+        full_vid, skor_vid, reels_vid, klip_json = None, None, None, None
+        clips = []
+
+        for f in files:
+            if f.endswith("_highlights_reels.mp4"):
+                reels_vid = f
+            elif f.endswith("_skor.mp4"):
+                skor_vid = f
+            elif f.endswith(".mp4") and "_klip_" not in f and not full_vid:
+                full_vid = f
+            elif f.endswith("_klip.json"):
+                klip_json = f
+
+        total_bm = 0
+        if klip_json:
+            try:
+                with open(os.path.join(fpath, klip_json), encoding="utf-8") as kf:
+                    kdata = json.load(kf)
+                    total_bm = kdata.get("total_bookmarks", len(kdata.get("bookmarks", [])))
+                    raw_clips = kdata.get("clips", [])
+                    for rc in raw_clips:
+                        c_file = rc.get("file")
+                        if c_file and os.path.isfile(os.path.join(fpath, c_file)):
+                            clips.append({
+                                "file": c_file,
+                                "url": f"/media/lapangan{court_id}/{item}/{c_file}",
+                                "time_str": rc.get("time_str", ""),
+                                "skor": rc.get("skor", ""),
+                                "duration": rc.get("duration", 0),
+                                "size_mb": rc.get("size_mb", 0)
+                            })
+            except Exception:
+                pass
+
+        if not clips:
+            for f in sorted(files):
+                if "_klip_" in f and f.endswith(".mp4"):
+                    sz = round(os.path.getsize(os.path.join(fpath, f)) / (1024 * 1024), 2)
+                    clips.append({
+                        "file": f,
+                        "url": f"/media/lapangan{court_id}/{item}/{f}",
+                        "time_str": "",
+                        "skor": "",
+                        "size_mb": sz
+                    })
+
+        main_vid = skor_vid or full_vid
+        if not main_vid and not clips and not reels_vid:
+            continue
+
+        main_size = round(os.path.getsize(os.path.join(fpath, main_vid)) / (1024 * 1024), 2) if main_vid else 0
+        reel_size = round(os.path.getsize(os.path.join(fpath, reels_vid)) / (1024 * 1024), 2) if reels_vid else 0
+
+        parts = item.split("_", 2)
+        date_str = parts[0] if len(parts) > 0 else ""
+        time_str = parts[1].replace("-", ":") if len(parts) > 1 else ""
+        teams_str = parts[2].replace("-vs-", " vs ").replace("-", " ") if len(parts) > 2 else item
+
+        sessions.append({
+            "folder": item,
+            "title": teams_str.upper(),
+            "date": f"{date_str} {time_str}",
+            "main_video": main_vid,
+            "main_url": f"/media/lapangan{court_id}/{item}/{main_vid}" if main_vid else None,
+            "main_size_mb": main_size,
+            "has_skor": bool(skor_vid),
+            "reels_video": reels_vid,
+            "reels_url": f"/media/lapangan{court_id}/{item}/{reels_vid}" if reels_vid else None,
+            "reels_size_mb": reel_size,
+            "total_bookmarks": total_bm or len(clips),
+            "clips": clips
+        })
+
+    return sessions[:20]
 
 
 # ── Perekam Sinyal Remote (Live Debugger) ───────────────────────────────────
@@ -938,6 +1138,79 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             return {}
 
+    def _serve_file_with_range(self, fpath):
+        """Melayani streaming dan download file video dengan dukungan Range Request (HTTP 206)."""
+        file_size = os.path.getsize(fpath)
+        ext = os.path.splitext(fpath)[1].lower()
+        ctype = {
+            ".mp4": "video/mp4",
+            ".json": "application/json",
+            ".jsonl": "application/json",
+            ".ass": "text/plain",
+            ".log": "text/plain",
+            ".txt": "text/plain",
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".svg": "image/svg+xml"
+        }.get(ext, "application/octet-stream")
+
+        range_header = self.headers.get("Range")
+        if not range_header or not range_header.startswith("bytes="):
+            # Full content
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(file_size))
+            self.send_header("Accept-Ranges", "bytes")
+            if ext == ".mp4" and "download=1" in self.path:
+                self.send_header("Content-Disposition", f'attachment; filename="{os.path.basename(fpath)}"')
+            self.end_headers()
+            with open(fpath, "rb") as f:
+                while True:
+                    chunk = f.read(65536)
+                    if not chunk:
+                        break
+                    try:
+                        self.wfile.write(chunk)
+                    except (ConnectionResetError, BrokenPipeError):
+                        break
+            return
+
+        # Partial content (Range)
+        try:
+            ranges = range_header.replace("bytes=", "").split("-")
+            start = int(ranges[0]) if ranges[0] else 0
+            end = int(ranges[1]) if ranges[1] else file_size - 1
+            if start >= file_size or end >= file_size or start > end:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{file_size}")
+                self.end_headers()
+                return
+
+            length = end - start + 1
+            self.send_response(206)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
+            self.send_header("Content-Length", str(length))
+            self.send_header("Accept-Ranges", "bytes")
+            self.end_headers()
+
+            with open(fpath, "rb") as f:
+                f.seek(start)
+                remaining = length
+                while remaining > 0:
+                    read_len = min(65536, remaining)
+                    chunk = f.read(read_len)
+                    if not chunk:
+                        break
+                    try:
+                        self.wfile.write(chunk)
+                    except (ConnectionResetError, BrokenPipeError):
+                        break
+                    remaining -= len(chunk)
+        except Exception:
+            self.send_response(500)
+            self.end_headers()
+
     # ── GET ───────────────────────────────────────────────────────────────
     def do_GET(self):
         path = self.path.split("?")[0]
@@ -1037,6 +1310,66 @@ class Handler(BaseHTTPRequestHandler):
                 if "court_id" in sess:
                     info["court_id"] = sess["court_id"]
                 self._json(info)
+            return
+
+        # Media rekaman video & highlight (dukungan streaming partial content & download)
+        if path.startswith("/media/"):
+            rel_file = path[7:]
+            if ".." in rel_file:
+                self._json({"error": "forbidden"}, 403)
+                return
+            full_path = os.path.normpath(os.path.join(BASE, "rekaman", rel_file))
+            base_dir = os.path.normpath(os.path.join(BASE, "rekaman"))
+            if not full_path.startswith(base_dir) or not os.path.isfile(full_path):
+                self._json({"error": "file not found"}, 404)
+                return
+            self._serve_file_with_range(full_path)
+            return
+
+        # Halaman share download untuk HP pemain
+        if path.startswith("/share/"):
+            share_page = os.path.join(BASE, "web", "share.html")
+            if os.path.isfile(share_page):
+                self._html(share_page)
+            else:
+                self._json({"error": "share page not found"}, 404)
+            return
+
+        # API: /api/system/info
+        if path == "/api/system/info":
+            ip = get_local_ip()
+            port = int(CFG.get("port", 8080))
+            self._json({"ok": True, "ip": ip, "port": port, "base_url": f"http://{ip}:{port}"})
+            return
+
+        # API: /api/qr?text=... (Generate SVG QR code)
+        if path == "/api/qr":
+            query = self.path.split("?")[1] if "?" in self.path else ""
+            params = urllib.parse.parse_qs(query)
+            text = params.get("text", [""])[0]
+            if not text:
+                self._json({"error": "parameter text dibutuhkan"}, 400)
+                return
+            try:
+                import qrcode
+                import qrcode.image.svg
+                img = qrcode.make(text, image_factory=qrcode.image.svg.SvgPathImage, box_size=10, border=2)
+                svg_data = img.to_string()
+                self.send_response(200)
+                self.send_header("Content-Type", "image/svg+xml")
+                self.send_header("Content-Length", str(len(svg_data)))
+                self.send_header("Cache-Control", "public, max-age=86400")
+                self.end_headers()
+                self.wfile.write(svg_data)
+            except Exception as e:
+                self._json({"error": str(e)}, 500)
+            return
+
+        # API: /api/court/<n>/media
+        m = re.match(r"^/api/court/(\d+)/media$", path)
+        if m:
+            cid = int(m.group(1))
+            self._json({"ok": True, "court_id": cid, "sessions": get_court_media(cid)})
             return
 
         # API: /api/court/<n>/status
@@ -1142,6 +1475,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(s.cancel_stop())
             elif action == "reset-match":
                 self._json(s.reset_match())
+            elif action == "create-clips":
+                import clipper
+                sessions = get_court_media(cid)
+                if not sessions:
+                    self._json({"error": "Tidak ada rekaman"}, 404)
+                    return
+                latest = sessions[0]
+                target_video = os.path.join(s._cfg["output_dir"], latest["folder"], latest["main_video"])
+                if not os.path.isfile(target_video):
+                    self._json({"error": "File video tidak ditemukan"}, 404)
+                    return
+                res = clipper.create_clips_for_video(target_video, dict(CFG))
+                self._json({"ok": True, "result": res})
             elif action == "test":
                 self._json(s.test())
             elif action == "discover":
@@ -1269,6 +1615,17 @@ def main():
     if not shutil.which(ffmpeg_bin) and not os.path.exists(ffmpeg_bin):
         print("PERINGATAN: ffmpeg tidak ditemukan. Papan skor tetap jalan, tapi rekaman tidak bisa dibuat.")
         print("Windows: buka Command Prompt lalu ketik  winget install ffmpeg")
+
+    # Jalankan pemeriksaan kapasitas harddisk / auto-cleanup rekaman lama di latar belakang
+    def _cleanup_daemon():
+        clean_old_recordings()
+        while True:
+            time.sleep(3600)
+            try:
+                clean_old_recordings()
+            except Exception:
+                pass
+    threading.Thread(target=_cleanup_daemon, daemon=True).start()
 
     port = int(CFG.get("port", 8080))
     srv = ThreadingHTTPServer(("0.0.0.0", port), Handler)
