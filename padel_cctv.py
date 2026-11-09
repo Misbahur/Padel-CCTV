@@ -800,16 +800,96 @@ def _save_court_names(court_id, names):
     _save_court_settings(court_id, names=names)
 
 
-def get_local_ip():
-    """Mendapatkan alamat IP lokal (LAN) server agar bisa di-share ke HP pemain via Wi-Fi."""
+def _save_server_ip(server_ip):
+    """Tulis server_ip atau base_url ke config.json."""
+    raw = {}
+    if os.path.exists(CONFIG_PATH):
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            raw = json.load(f)
+    raw["server_ip"] = server_ip
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(raw, f, indent=2, ensure_ascii=False)
+    CFG["server_ip"] = server_ip
+
+
+def get_all_lan_ips():
+    """Mendapatkan seluruh daftar IP LAN lokal yang valid (non-loopback, non-APIPA)."""
+    ips = []
+    # 1. Metode UDP connect
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
         ip = s.getsockname()[0]
         s.close()
-        return ip
+        if ip and not ip.startswith("127.") and not ip.startswith("169.254."):
+            if ip not in ips:
+                ips.append(ip)
     except Exception:
-        return "127.0.0.1"
+        pass
+
+    # 2. Hostname DNS resolution (sangat andal saat offline / tanpa internet)
+    try:
+        host = socket.gethostname()
+        for ip in socket.gethostbyname_ex(host)[2]:
+            if not ip.startswith("127.") and not ip.startswith("169.254."):
+                if ip not in ips:
+                    ips.append(ip)
+    except Exception:
+        pass
+
+    # 3. getaddrinfo
+    try:
+        for item in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = item[4][0]
+            if not ip.startswith("127.") and not ip.startswith("169.254."):
+                if ip not in ips:
+                    ips.append(ip)
+    except Exception:
+        pass
+
+    return ips
+
+
+def get_local_ip():
+    """Mendapatkan alamat IP lokal (LAN) server agar bisa di-share ke HP pemain via Wi-Fi."""
+    # 1. Prioritaskan server_ip dari config jika sudah diatur manual oleh admin
+    cfg_ip = CFG.get("server_ip")
+    if cfg_ip and str(cfg_ip).strip() and not str(cfg_ip).startswith("127.") and "localhost" not in str(cfg_ip):
+        return str(cfg_ip).strip()
+
+    # 2. Ambil dari daftar IP LAN yang terdeteksi
+    all_ips = get_all_lan_ips()
+    for ip in all_ips:
+        if ip.startswith("192.168.") or ip.startswith("10."):
+            return ip
+    for ip in all_ips:
+        if ip.startswith("172."):
+            parts = ip.split(".")
+            if len(parts) >= 2 and 16 <= int(parts[1]) <= 31:
+                return ip
+
+    if all_ips:
+        return all_ips[0]
+
+    return "127.0.0.1"
+
+
+def get_base_url():
+    """Menghasilkan base URL lengkap (http://IP:PORT) yang siap dipakai untuk QR Code."""
+    custom = CFG.get("base_url")
+    if custom and "localhost" not in custom and "127.0.0.1" not in custom:
+        return custom.rstrip("/")
+
+    cfg_ip = CFG.get("server_ip")
+    if cfg_ip and (str(cfg_ip).startswith("http://") or str(cfg_ip).startswith("https://")):
+        return str(cfg_ip).rstrip("/")
+
+    ip = get_local_ip()
+    port = int(CFG.get("port", 8080))
+    if cfg_ip and ":" in str(cfg_ip) and not str(cfg_ip).startswith("http"):
+        return f"http://{cfg_ip}"
+
+    return f"http://{ip}:{port}"
 
 
 def clean_old_recordings(retention_days=7, min_free_gb=15.0):
@@ -959,6 +1039,11 @@ def get_court_media(court_id):
         time_str = parts[1].replace("-", ":") if len(parts) > 1 else ""
         teams_str = parts[2].replace("-vs-", " vs ").replace("-", " ") if len(parts) > 2 else item
 
+        base_url = get_base_url()
+        share_path = f"/share/{court_id}/{item}"
+        share_url = f"{base_url}{share_path}"
+        qr_url = f"/api/qr?text={urllib.parse.quote(share_url)}"
+
         sessions.append({
             "folder": item,
             "title": teams_str.upper(),
@@ -971,7 +1056,10 @@ def get_court_media(court_id):
             "reels_url": f"/media/lapangan{court_id}/{item}/{reels_vid}" if reels_vid else None,
             "reels_size_mb": reel_size,
             "total_bookmarks": total_bm or len(clips),
-            "clips": clips
+            "clips": clips,
+            "share_path": share_path,
+            "share_url": share_url,
+            "qr_url": qr_url
         })
 
     return sessions[:20]
@@ -1337,9 +1425,24 @@ class Handler(BaseHTTPRequestHandler):
 
         # API: /api/system/info
         if path == "/api/system/info":
+            base_url = get_base_url()
             ip = get_local_ip()
             port = int(CFG.get("port", 8080))
-            self._json({"ok": True, "ip": ip, "port": port, "base_url": f"http://{ip}:{port}"})
+            all_ips = get_all_lan_ips()
+            self._json({
+                "ok": True,
+                "ip": ip,
+                "port": port,
+                "base_url": base_url,
+                "server_ip": CFG.get("server_ip", ""),
+                "all_ips": all_ips,
+                "is_localhost": (ip == "127.0.0.1" or "localhost" in base_url),
+                "server": {
+                    "local_ip": ip,
+                    "port": port,
+                    "base_url": base_url
+                }
+            })
             return
 
         # API: /api/qr?text=... (Generate SVG QR code)
@@ -1580,20 +1683,24 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "message": str(e)}, 500)
             return
 
+        if path == "/api/admin/set-server-ip":
+            sess = check_auth(self, required_role="admin")
+            if not sess:
+                self._json({"error": "unauthorized"}, 401)
+                return
+            new_ip = str(data.get("server_ip", "")).strip()
+            _save_server_ip(new_ip)
+            base_url = get_base_url()
+            self._json({"ok": True, "server_ip": new_ip, "base_url": base_url})
+            return
+
         self._json({"error": "not found"}, 404)
 
 
 # ── Utils ────────────────────────────────────────────────────────────────────
 def local_ips():
-    ips = set()
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ips.add(s.getsockname()[0])
-        s.close()
-    except OSError:
-        pass
-    return sorted(ips)
+    ips = get_all_lan_ips()
+    return ips if ips else [get_local_ip()]
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────

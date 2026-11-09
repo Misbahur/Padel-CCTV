@@ -60,6 +60,13 @@ export default function DashboardView({ navigate }) {
   const [serverBaseUrl, setServerBaseUrl] = useState('');
   const [isClipping, setIsClipping] = useState(false);
 
+  // Pengaturan IP Server untuk QR Code
+  const [customServerIp, setCustomServerIp] = useState('');
+  const [detectedServerIp, setDetectedServerIp] = useState('');
+  const [allDetectedIps, setAllDetectedIps] = useState([]);
+  const [serverIpMsg, setServerIpMsg] = useState(null);
+  const [savingIp, setSavingIp] = useState(false);
+
   const fetchStatus = async () => {
     try {
       const res = await fetch('/api/admin/status');
@@ -90,9 +97,26 @@ export default function DashboardView({ navigate }) {
     }
   };
 
+  const fetchSystemInfo = async () => {
+    try {
+      const res = await fetch('/api/system/info');
+      const data = await res.json();
+      if (data.ok) {
+        if (data.base_url) setServerBaseUrl(data.base_url);
+        if (data.ip) setDetectedServerIp(data.ip);
+        if (data.server_ip) setCustomServerIp(data.server_ip);
+        else if (data.ip && data.ip !== '127.0.0.1') setCustomServerIp(data.ip);
+        if (data.all_ips) setAllDetectedIps(data.all_ips);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   useEffect(() => {
     fetchStatus();
     fetchConfig();
+    fetchSystemInfo();
     const interval = setInterval(fetchStatus, 3000);
     return () => clearInterval(interval);
   }, []);
@@ -165,14 +189,10 @@ export default function DashboardView({ navigate }) {
       try {
         const sysRes = await fetch('/api/system/info');
         const sysData = await sysRes.json();
-        if (sysData.ok && sysData.server) {
-          setServerBaseUrl(`http://${sysData.server.local_ip}:${sysData.server.port}`);
-        } else {
-          setServerBaseUrl(window.location.origin);
+        if (sysData.ok && (sysData.base_url || sysData.server?.base_url)) {
+          setServerBaseUrl(sysData.base_url || sysData.server.base_url);
         }
-      } catch (_) {
-        setServerBaseUrl(window.location.origin);
-      }
+      } catch (_) {}
 
       // 2. Dapatkan daftar rekaman & klip lapangan
       const res = await fetch(`/api/court/${cid}/media`);
@@ -196,6 +216,31 @@ export default function DashboardView({ navigate }) {
       console.error('Error fetching court media:', e);
     } finally {
       setMediaLoading(false);
+    }
+  };
+
+  const handleSaveServerIp = async (e) => {
+    e.preventDefault();
+    setSavingIp(true);
+    setServerIpMsg(null);
+    try {
+      const res = await fetch('/api/admin/set-server-ip', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ server_ip: customServerIp.trim() })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setServerBaseUrl(data.base_url);
+        setServerIpMsg({ type: 'success', text: `IP Server berhasil disimpan (${data.base_url}). QR Code sekarang menggunakan alamat ini!` });
+        setTimeout(() => setServerIpMsg(null), 5000);
+      } else {
+        setServerIpMsg({ type: 'error', text: data.message || 'Gagal menyimpan IP Server' });
+      }
+    } catch (err) {
+      setServerIpMsg({ type: 'error', text: 'Gagal terhubung ke server' });
+    } finally {
+      setSavingIp(false);
     }
   };
 
@@ -933,6 +978,81 @@ export default function DashboardView({ navigate }) {
           </div>
         </section>
 
+        {/* SECTION 4: PENGATURAN IP SERVER & QR CODE DOWNLOAD */}
+        <section className="bg-padel-surface/70 border border-padel-border/60 rounded-3xl p-6 sm:p-8 backdrop-blur-md">
+          <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h2 className="text-xl font-score font-bold tracking-wide uppercase text-white flex items-center gap-2">
+                <QrCode className="w-5 h-5 text-padel-volt" />
+                <span>Pengaturan IP Server & QR Code Download</span>
+              </h2>
+              <p className="text-xs text-slate-400">
+                Alamat IP server Wi-Fi lokal yang ditanam ke QR Code agar smartphone pemain dapat memindai dan mengunduh video match
+              </p>
+            </div>
+            {serverBaseUrl && (
+              <span className={`px-3 py-1 rounded-full border font-mono text-xs self-start sm:self-auto font-semibold flex items-center gap-1.5 ${
+                serverBaseUrl.includes('localhost') || serverBaseUrl.includes('127.0.0.1')
+                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                  : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+              }`}>
+                <span className={`w-2 h-2 rounded-full ${serverBaseUrl.includes('localhost') || serverBaseUrl.includes('127.0.0.1') ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+                <span>Aktif: {serverBaseUrl}</span>
+              </span>
+            )}
+          </div>
+
+          {serverIpMsg && (
+            <div className={`mb-4 p-3 rounded-xl border text-xs ${serverIpMsg.type === 'error' ? 'bg-red-500/20 border-red-500/40 text-red-300' : 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'}`}>
+              {serverIpMsg.text}
+            </div>
+          )}
+
+          <form onSubmit={handleSaveServerIp} className="flex flex-col gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="md:col-span-2 flex flex-col gap-1.5">
+                <label className="text-xs font-bold text-slate-300 uppercase tracking-wider">
+                  Alamat IP / URL Server Wi-Fi (Untuk QR Code)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Contoh: 192.168.11.103 atau http://192.168.11.103:8080"
+                  value={customServerIp}
+                  onChange={e => setCustomServerIp(e.target.value)}
+                  className="bg-padel-dark border border-padel-border/60 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-padel-volt font-mono"
+                />
+                <div className="text-[11px] text-slate-400 flex flex-wrap gap-2 items-center">
+                  <span>IP Otomatis Terdeteksi: <strong className="text-padel-volt">{detectedServerIp || 'Mendeteksi...'}</strong></span>
+                  {allDetectedIps.length > 1 && (
+                    <span>(IP lain: {allDetectedIps.join(', ')})</span>
+                  )}
+                  {detectedServerIp && (
+                    <button
+                      type="button"
+                      onClick={() => setCustomServerIp(detectedServerIp)}
+                      className="text-cyan-400 hover:underline font-semibold"
+                    >
+                      [Gunakan IP ini]
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="flex flex-col justify-end">
+                <button
+                  type="submit"
+                  disabled={savingIp}
+                  className="w-full py-2.5 px-4 rounded-xl bg-padel-volt hover:bg-padel-voltHover text-black font-score font-bold text-xs uppercase tracking-wider transition-all disabled:opacity-50 shadow-md shadow-padel-volt/20"
+                >
+                  {savingIp ? 'Menyimpan...' : 'Simpan IP Server QR'}
+                </button>
+              </div>
+            </div>
+            <p className="text-[11px] text-slate-400 leading-relaxed">
+              💡 <strong>Catatan:</strong> Pastikan HP pemain terhubung ke jaringan Wi-Fi yang sama dengan PC server agar video dapat diputar dan diunduh dari QR Code.
+            </p>
+          </form>
+        </section>
+
       </main>
 
       {/* MODAL SET PEMAIN & FORMAT PERTANDINGAN LANGSUNG DARI RESEPSIONIS / ADMIN */}
@@ -1244,12 +1364,15 @@ export default function DashboardView({ navigate }) {
                 {/* QR Code Share Card for Mobile Users */}
                 {selectedMediaSession && (() => {
                   const sharePath = `/share/${mediaCourtId}/${selectedMediaSession.folder}`;
-                  const fullShareUrl = (serverBaseUrl || window.location.origin) + sharePath;
+                  const fullShareUrl = selectedMediaSession.share_url || (serverBaseUrl ? `${serverBaseUrl}${sharePath}` : `${window.location.origin}${sharePath}`);
+                  const qrImgSrc = selectedMediaSession.qr_url || `/api/qr?text=${encodeURIComponent(fullShareUrl)}`;
+                  const isLocalhost = fullShareUrl.includes('localhost') || fullShareUrl.includes('127.0.0.1');
+
                   return (
                     <div className="p-4 rounded-2xl bg-gradient-to-r from-pink-950/20 via-padel-dark to-cyan-950/20 border border-pink-500/30 flex flex-col sm:flex-row items-center gap-4">
                       <div className="bg-white p-2.5 rounded-2xl shrink-0 shadow-lg shadow-black/50">
                         <img
-                          src={`/api/qr?text=${encodeURIComponent(fullShareUrl)}`}
+                          src={qrImgSrc}
                           alt="QR Code Video Share"
                           className="w-28 h-28 sm:w-32 sm:h-32 block"
                         />
@@ -1260,11 +1383,19 @@ export default function DashboardView({ navigate }) {
                           <span>Scan QR untuk Download di HP</span>
                         </div>
                         <p className="text-xs text-slate-300 leading-relaxed">
-                          Pemain cukup scan QR ini dengan kamera smartphone untuk menonton dan mengunduh Reels Highlight atau Full Match tanpa login admin!
+                          Pemain cukup scan QR ini dengan smartphone (terhubung ke Wi-Fi yang sama) untuk menonton dan mengunduh Reels Highlight atau Full Match!
                         </p>
+                        <div className="text-[11px] font-mono text-padel-volt bg-black/40 px-2.5 py-1 rounded-lg border border-padel-border/60 inline-block break-all self-center sm:self-start">
+                          {fullShareUrl}
+                        </div>
+                        {isLocalhost && (
+                          <div className="text-[11px] text-amber-300 bg-amber-500/20 border border-amber-500/40 p-2 rounded-xl text-left">
+                            ⚠️ <strong>Peringatan:</strong> URL saat ini mengarah ke <code>localhost</code>. HP pemain tidak akan bisa mengakses video dari jaringan luar. Masukkan IP Wi-Fi server pada pengaturan di bawah!
+                          </div>
+                        )}
                         <div className="flex items-center justify-center sm:justify-start gap-2 pt-1">
                           <a
-                            href={sharePath}
+                            href={fullShareUrl}
                             target="_blank"
                             rel="noreferrer"
                             className="px-3.5 py-1.5 rounded-xl bg-pink-500/20 hover:bg-pink-500/30 border border-pink-500/40 text-pink-300 text-xs font-semibold flex items-center gap-1.5 transition-colors"

@@ -454,6 +454,7 @@ export default function CourtView({ courtId, navigate }) {
 
   useEffect(() => {
     pollStatus();
+    fetchMedia();
     const interval = setInterval(pollStatus, 3000);
     return () => clearInterval(interval);
   }, [courtId]);
@@ -2472,36 +2473,54 @@ export default function CourtView({ courtId, navigate }) {
                     </div>
 
                     {/* QR Code Section */}
-                    {serverBaseUrl && (
-                      <div className="flex items-center gap-3 bg-white/5 p-2.5 rounded-2xl border border-white/10 shrink-0">
-                        <img
-                          src={`/api/qr?text=${encodeURIComponent(`${serverBaseUrl}/share/${courtId}/${selectedMediaSession.folder}`)}`}
-                          alt="QR Code Download"
-                          className="w-20 h-20 bg-white p-1 rounded-xl shrink-0"
-                        />
-                        <div className="flex flex-col gap-1 text-[11px]">
-                          <span className="font-bold text-white uppercase tracking-wider flex items-center gap-1">
-                            <QrCode className="w-3.5 h-3.5 text-padel-volt" /> Scan Pakai HP
-                          </span>
-                          <span className="text-slate-400 text-[10px] leading-tight max-w-[130px]">
-                            Buka kamera HP di Wi-Fi untuk download langsung
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const shareUrl = `${serverBaseUrl}/share/${courtId}/${selectedMediaSession.folder}`;
-                              navigator.clipboard.writeText(shareUrl);
-                              setCopiedUrl(true);
-                              setTimeout(() => setCopiedUrl(false), 2000);
-                            }}
-                            className="mt-1 px-2 py-1 rounded-lg bg-padel-card hover:bg-padel-border/60 text-[10px] text-slate-300 font-semibold flex items-center gap-1 self-start"
-                          >
-                            {copiedUrl ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                            <span>{copiedUrl ? 'Tersalin!' : 'Salin Link'}</span>
-                          </button>
+                    {(() => {
+                      const sharePath = `/share/${courtId}/${selectedMediaSession.folder}`;
+                      const shareUrl = selectedMediaSession.share_url || (serverBaseUrl ? `${serverBaseUrl}${sharePath}` : `${window.location.origin}${sharePath}`);
+                      const qrImgSrc = selectedMediaSession.qr_url || `/api/qr?text=${encodeURIComponent(shareUrl)}`;
+                      const isLocalhost = shareUrl.includes('localhost') || shareUrl.includes('127.0.0.1');
+
+                      return (
+                        <div className="flex flex-col gap-1.5 shrink-0">
+                          <div className="flex items-center gap-3 bg-white/5 p-2.5 rounded-2xl border border-white/10">
+                            <div className="bg-white p-1 rounded-xl shrink-0 shadow">
+                              <img
+                                src={qrImgSrc}
+                                alt="QR Code Download"
+                                className="w-20 h-20 block"
+                              />
+                            </div>
+                            <div className="flex flex-col gap-1 text-[11px]">
+                              <span className="font-bold text-white uppercase tracking-wider flex items-center gap-1">
+                                <QrCode className="w-3.5 h-3.5 text-padel-volt" /> Scan Pakai HP
+                              </span>
+                              <span className="text-slate-400 text-[10px] leading-tight max-w-[140px]">
+                                Hubungkan HP ke Wi-Fi lapangan lalu scan QR ini
+                              </span>
+                              <div className="text-[10px] text-padel-volt font-mono font-semibold truncate max-w-[150px]" title={shareUrl}>
+                                {shareUrl}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(shareUrl);
+                                  setCopiedUrl(true);
+                                  setTimeout(() => setCopiedUrl(false), 2000);
+                                }}
+                                className="mt-0.5 px-2 py-1 rounded-lg bg-padel-card hover:bg-padel-border/60 text-[10px] text-slate-300 font-semibold flex items-center gap-1 self-start"
+                              >
+                                {copiedUrl ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                                <span>{copiedUrl ? 'Tersalin!' : 'Salin Link'}</span>
+                              </button>
+                            </div>
+                          </div>
+                          {isLocalhost && (
+                            <div className="text-[10px] text-amber-300 bg-amber-500/20 border border-amber-500/40 px-2 py-1 rounded-lg">
+                              ⚠️ Terbaca localhost. Atur IP Server di Dashboard Admin.
+                            </div>
+                          )}
                         </div>
-                      </div>
-                    )}
+                      );
+                    })()}
                   </div>
                 )}
 
