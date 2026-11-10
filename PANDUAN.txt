@@ -32,7 +32,7 @@ Progresnya terlihat di halaman, bagian "Rekaman CCTV".
 - Skor terasa lebih cepat/lambat dari kejadian di video?
   Atur "offset_seconds" (contoh 1.5 = skor muncul 1,5 detik lebih
   lambat), lalu buat ulang videonya lewat Command Prompt:
-     python padel_cctv.py --render rekaman\NAMA_VIDEO.mp4 --offset 1.5
+     python main.py --render rekaman\NAMA_VIDEO.mp4 --offset 1.5
 
 Pengaturan "overlay" di config.json:
   position       : top-left, top-right, bottom-left, bottom-right
@@ -54,7 +54,7 @@ PERSIAPAN (sekali saja, di laptop/PC Windows)
    lalu tutup dan buka lagi Command Prompt.
 3. Laptop harus satu jaringan (Wi-Fi/LAN) dengan CCTV.
 4. Tambahkan kamera dari halaman papan skor (lihat bagian Bardi),
-   atau isi alamat RTSP manual di config.json dengan Notepad.
+   atau isi alamat RTSP kamera di file .env (COURT_1_CAM_1_RTSP, dst).
 
 
 MENGHUBUNGKAN CCTV BARDI
@@ -104,7 +104,7 @@ Semua kamera merekam bersamaan, satu file per kamera.
 MENJALANKAN
 -----------
 Klik dua kali  jalankan.bat
-(atau: python padel_cctv.py, lalu buka http://localhost:8080)
+(atau: python main.py, lalu buka http://localhost:8080)
 
 Di halaman, tekan "Tes kamera" untuk memastikan CCTV terhubung.
 

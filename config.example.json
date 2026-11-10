@@ -1,23 +1,113 @@
 {
-  "port": 8080,
-  "output_dir": "rekaman",
-  "post_roll_seconds": 15,
-  "audio": true,
-  "ffmpeg": "ffmpeg",
-  "ffprobe": "ffprobe",
-  "overlay": {
+  "clipping": {
     "enabled": true,
-    "position": "top-left",
-    "scale": 1.0,
-    "offset_seconds": 0.0,
-    "preset": "veryfast",
-    "crf": 21,
-    "keep_original": true
+    "pre_roll_seconds": 12,
+    "post_roll_seconds": 4,
+    "create_reel": true
   },
-  "cameras": [
+  "storage": {
+    "retention_days": 7,
+    "min_free_gb": 15
+  },
+  "courts": [
     {
+      "id": 1,
       "name": "Lapangan 1",
-      "rtsp": "rtsp://admin:PASSWORD@192.168.1.64:554/Streaming/Channels/101"
+      "output_dir": "rekaman/lapangan1",
+      "post_roll_seconds": 15,
+      "audio": true,
+      "overlay": {
+        "enabled": true,
+        "position": "top-left",
+        "scale": 1.0,
+        "offset_seconds": 0.0,
+        "preset": "veryfast",
+        "crf": 21,
+        "keep_original": true
+      },
+      "cameras": [
+        {
+          "name": "Kamera Utama",
+          "env_key": "COURT_1_CAM_1_RTSP"
+        }
+      ],
+      "names": [
+        "Tim A",
+        "Tim B"
+      ],
+      "match_rules": {
+        "mode": "golden",
+        "bestOf": 3,
+        "games": 6,
+        "superTb": false,
+        "target": 24
+      }
+    },
+    {
+      "id": 2,
+      "name": "Lapangan 2",
+      "output_dir": "rekaman/lapangan2",
+      "post_roll_seconds": 15,
+      "audio": true,
+      "overlay": {
+        "enabled": true,
+        "position": "top-left",
+        "scale": 1.0,
+        "offset_seconds": 0.0,
+        "preset": "veryfast",
+        "crf": 21,
+        "keep_original": true
+      },
+      "cameras": [
+        {
+          "name": "Kamera Utama",
+          "env_key": "COURT_2_CAM_1_RTSP"
+        }
+      ],
+      "names": [
+        "Tim A",
+        "Tim B"
+      ],
+      "match_rules": {
+        "mode": "golden",
+        "bestOf": 3,
+        "games": 6,
+        "superTb": false,
+        "target": 24
+      }
+    },
+    {
+      "id": 3,
+      "name": "Lapangan 3",
+      "output_dir": "rekaman/lapangan3",
+      "post_roll_seconds": 15,
+      "audio": true,
+      "overlay": {
+        "enabled": true,
+        "position": "top-left",
+        "scale": 1.0,
+        "offset_seconds": 0.0,
+        "preset": "veryfast",
+        "crf": 21,
+        "keep_original": true
+      },
+      "cameras": [
+        {
+          "name": "Kamera Utama",
+          "env_key": "COURT_3_CAM_1_RTSP"
+        }
+      ],
+      "names": [
+        "Tim A",
+        "Tim B"
+      ],
+      "match_rules": {
+        "mode": "golden",
+        "bestOf": 3,
+        "games": 6,
+        "superTb": false,
+        "target": 24
+      }
     }
   ]
 }

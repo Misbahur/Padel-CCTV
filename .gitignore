@@ -5,6 +5,12 @@ __pycache__/
 *.tmp.mp4
 court_*_state.json
 
+# Environment & Local Config (contains credentials / RTSP URLs / per-venue setup)
+.env
+.env.*
+!.env.example
+config.json
+
 # Node & Frontend
 node_modules/
 frontend/node_modules/

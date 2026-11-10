@@ -329,7 +329,7 @@ def create_clips_for_video(video_path, cfg=None, pre_roll=None, post_roll=None, 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Penggunaan: python clipper.py <path_ke_video.mp4>")
+        print("Penggunaan: python backend/clipper.py <path_ke_video.mp4>")
         sys.exit(1)
     target_vid = sys.argv[1]
     res = create_clips_for_video(target_vid)

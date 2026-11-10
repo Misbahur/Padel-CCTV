@@ -710,7 +710,7 @@ async function api(path,body){
 
 async function pollRec(){
   const st=await api('/status');
-  if(!st){$('recState').textContent='Server perekam tidak terhubung. Periksa padel_cctv.py.';rec.recording=false;render();return}
+  if(!st){$('recState').textContent='Server perekam tidak terhubung. Periksa server (main.py).';rec.recording=false;render();return}
   
   if(st.court_name){
     $('courtTitle').textContent = st.court_name;
