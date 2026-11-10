@@ -206,6 +206,23 @@
         <div id="clipsList" style="display: flex; flex-direction: column; gap: 12px;"></div>
       </div>
 
+      <!-- AUTO-CLIP AI CARD -->
+      <div id="autoClipsCard" class="card" style="display: none;">
+        <div class="card-title volt">
+          <span>🤖 Highlight Otomatis Auto-Clip AI</span>
+          <span id="autoClipsCount" class="pill" style="background: var(--volt-glow); color: var(--volt); border-color: var(--volt);">0 Klip</span>
+        </div>
+        <div id="autoReelWrap" style="display: none; flex-direction: column; gap: 10px;">
+          <video id="autoReelPlayer" controls playsinline preload="metadata">
+            <source id="autoReelSource" src="" type="video/mp4">
+          </video>
+          <a id="btnDownloadAutoReel" href="#" download class="btn btn-volt">
+            <span>⬇️ Unduh Auto-Reel Highlight</span>
+          </a>
+        </div>
+        <div id="autoClipsList" style="display: flex; flex-direction: column; gap: 12px;"></div>
+      </div>
+
       <!-- FULL MATCH VIDEO CARD -->
       <div id="fullCard" class="card" style="display: none;">
         <div class="card-title">
@@ -286,6 +303,37 @@
               </a>
             `;
             clipsList.appendChild(div);
+          });
+        }
+
+        // 2b. Auto-Clip AI Results (if generated)
+        if (sess.auto_reel_url || (sess.auto_clips && sess.auto_clips.length > 0)) {
+          document.getElementById('autoClipsCard').style.display = 'flex';
+          document.getElementById('autoClipsCount').innerText = `${(sess.auto_clips || []).length} AI Klip`;
+          if (sess.auto_reel_url) {
+            document.getElementById('autoReelWrap').style.display = 'flex';
+            document.getElementById('autoReelSource').src = sess.auto_reel_url;
+            document.getElementById('autoReelPlayer').load();
+            document.getElementById('btnDownloadAutoReel').href = sess.auto_reel_url;
+          }
+          const autoList = document.getElementById('autoClipsList');
+          autoList.innerHTML = '';
+          (sess.auto_clips || []).forEach((ac, idx) => {
+            const div = document.createElement('div');
+            div.className = 'clip-item';
+            div.innerHTML = `
+              <div class="clip-header">
+                <span>AI Klip #${idx + 1} (${ac.time_str || ''})</span>
+                <span class="pill">${ac.format || 'landscape'} · ${ac.duration || 0}s</span>
+              </div>
+              <video controls playsinline preload="none">
+                <source src="${ac.url}" type="video/mp4">
+              </video>
+              <a href="${ac.url}" download class="btn btn-outline" style="padding: 9px 14px; font-size: 12px;">
+                <span>⬇️ Unduh AI Klip #${idx + 1} (${ac.size_mb || 0} MB)</span>
+              </a>
+            `;
+            autoList.appendChild(div);
           });
         }
 

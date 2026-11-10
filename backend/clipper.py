@@ -139,6 +139,54 @@ def load_bookmarks(video_path):
     return [], None
 
 
+def concat_clips_to_reel(clip_paths, reel_path, ffmpeg="ffmpeg", working_dir=None, log_prefix="[Clipper]"):
+    """Menggabungkan daftar klip MP4 menjadi satu video reels highlight."""
+    if not clip_paths:
+        return None
+    folder = working_dir or os.path.dirname(os.path.abspath(reel_path))
+    reel_filename = os.path.basename(reel_path)
+    concat_txt_path = os.path.join(folder, f"{os.path.splitext(reel_filename)[0]}_concat_tmp.txt")
+
+    try:
+        with open(concat_txt_path, "w", encoding="utf-8") as cf:
+            for cp in clip_paths:
+                safe_cp = os.path.basename(cp).replace("'", "'\\''")
+                cf.write(f"file '{safe_cp}'\n")
+
+        print(f"🎞️ {log_prefix} Menggabungkan {len(clip_paths)} klip menjadi reels: {reel_filename}...")
+        concat_cmd = [
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "concat", "-safe", "0",
+            "-i", concat_txt_path,
+            "-c", "copy",
+            "-movflags", "+faststart",
+            reel_path,
+        ]
+        concat_proc = subprocess.run(concat_cmd, cwd=folder, capture_output=True, text=True)
+        if concat_proc.returncode != 0 or not os.path.isfile(reel_path):
+            concat_cmd = [
+                ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "concat", "-safe", "0",
+                "-i", concat_txt_path,
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+                "-c:a", "aac",
+                "-movflags", "+faststart",
+                reel_path,
+            ]
+            subprocess.run(concat_cmd, cwd=folder, capture_output=True, text=True)
+
+        if os.path.isfile(reel_path) and os.path.getsize(reel_path) > 1024:
+            print(f"  ✅ Reels highlight berhasil dibuat: {reel_filename} ({round(os.path.getsize(reel_path)/1e6, 2)} MB)")
+            return reel_path
+        return None
+    finally:
+        if os.path.exists(concat_txt_path):
+            try:
+                os.remove(concat_txt_path)
+            except OSError:
+                pass
+
+
 def create_clips_for_video(video_path, cfg=None, pre_roll=None, post_roll=None, create_reel=None, progress_cb=None):
     """
     Membuat klip-klip highlight dari video pertandingan.
@@ -254,50 +302,12 @@ def create_clips_for_video(video_path, cfg=None, pre_roll=None, post_roll=None, 
     reel_filename = None
     if create_reel and temp_concat_files:
         reel_filename = f"{base_name}_highlights_reels.mp4"
-        reel_path = os.path.join(folder, reel_filename)
-        concat_txt_path = os.path.join(folder, f"{base_name}_concat_tmp.txt")
-
-        try:
-            with open(concat_txt_path, "w", encoding="utf-8") as cf:
-                for cp in temp_concat_files:
-                    # Escape path untuk concat filter ffmpeg
-                    safe_cp = os.path.basename(cp).replace("'", "'\\''")
-                    cf.write(f"file '{safe_cp}'\n")
-
-            print(f"🎞️ [Clipper] Menggabungkan {len(temp_concat_files)} klip menjadi reels: {reel_filename}...")
-            concat_cmd = [
-                ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-                "-f", "concat", "-safe", "0",
-                "-i", concat_txt_path,
-                "-c", "copy",
-                "-movflags", "+faststart",
-                reel_path
-            ]
-            concat_proc = subprocess.run(concat_cmd, cwd=folder, capture_output=True, text=True)
-            if concat_proc.returncode != 0 or not os.path.isfile(reel_path):
-                # Fallback: re-encode jika copy stream berbeda
-                concat_cmd = [
-                    ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-                    "-f", "concat", "-safe", "0",
-                    "-i", concat_txt_path,
-                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
-                    "-c:a", "aac",
-                    "-movflags", "+faststart",
-                    reel_path
-                ]
-                subprocess.run(concat_cmd, cwd=folder, capture_output=True, text=True)
-
-            if os.path.isfile(reel_path) and os.path.getsize(reel_path) > 1024:
-                print(f"  ✅ Reels highlight berhasil dibuat: {reel_filename} ({round(os.path.getsize(reel_path)/1e6, 2)} MB)")
-            else:
-                reel_path = None
-                reel_filename = None
-        finally:
-            if os.path.exists(concat_txt_path):
-                try:
-                    os.remove(concat_txt_path)
-                except OSError:
-                    pass
+        candidate_reel = os.path.join(folder, reel_filename)
+        reel_path = concat_clips_to_reel(
+            temp_concat_files, candidate_reel, ffmpeg=ffmpeg, working_dir=folder, log_prefix="[Clipper]"
+        )
+        if not reel_path:
+            reel_filename = None
 
     # Perbarui file _klip.json dengan metadata klip & reel yang sudah jadi
     if klip_json_path and os.path.isfile(klip_json_path):

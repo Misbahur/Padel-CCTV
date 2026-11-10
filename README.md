@@ -17,10 +17,10 @@ Aplikasi papan skor padel digital multi-lapangan terintegrasi dengan perekam CCT
 - **Perekaman CCTV Otomatis (RTSP)**:
   - Rekaman mulai otomatis saat tombol **Main** ditekan dan berhenti setelah selesai + **post-roll** selebrasi (default 15 detik).
   - Format MP4 terfragmentasi (`+frag_keyframe+empty_moov`) tahan listrik mati mendadak dan auto-reconnect (`_part2`, `_part3`) jika stream terputus.
-- **Video Overlay Skor & Klip Highlight (Love ❤️)**:
+- **Video Overlay Skor, Klip Highlight (Love ❤️) & Studio Auto-Clip AI**:
   - Render subtitle ASS bergaya siaran TV secara otomatis menjadi file `*_skor.mp4`.
-  - Tandai momen seru selama pertandingan menggunakan tombol **Love ❤️** pada remote.
-  - Pemotongan klip highlight individual & kompilasi **Reels Highlight** dengan durasi **pre-roll** dan **post-roll** yang bisa dikustomisasi dari Dashboard Admin maupun modal media.
+  - Tandai momen seru selama pertandingan menggunakan tombol **Love ❤️** pada remote, dengan durasi **pre-roll** dan **post-roll** yang bisa dikustomisasi dari Dashboard Admin maupun modal media.
+  - **Studio Auto-Clip AI** (`/auto-clip`): halaman khusus terpisah dari proses selesai pertandingan untuk mengekstrak momen reli intensitas tinggi secara otomatis (OpenCV + NumPy), dilengkapi pengaturan target jumlah klip (default `5`), sensitivitas, durasi, serta format output **Landscape 16:9**, **Vertical 9:16 (Reels/TikTok)**, atau **Square 1:1**.
 - **Berbagi Video via QR Code (LAN)**:
   - Generate QR Code otomatis menggunakan **IP LAN lokal server** (bukan `localhost`), dengan deteksi IP otomatis maupun override manual di Dashboard.
   - Halaman mobile `/share/<court_id>/<folder>` agar pemain bisa langsung menonton & mengunduh video/klip dari HP di Wi-Fi yang sama.
@@ -65,6 +65,7 @@ Aplikasi papan skor padel digital multi-lapangan terintegrasi dengan perekam CCT
      ```
 4. **Buka di browser**:
    - Login / Admin Dashboard: `http://localhost:8080/login` dan `http://localhost:8080/dashboard`
+   - Studio Auto-Clip AI (Ekstrak klip otomatis untuk sosmed): `http://localhost:8080/auto-clip`
    - Papan skor lapangan: `http://localhost:8080/court/1` (atau `2`, `3`)
    - Dari HP/tablet dalam Wi-Fi yang sama: `http://<IP-LAN-SERVER>:8080`
 
@@ -107,7 +108,7 @@ padel-cctv/
 ├── rekaman/                 # Penyimpanan rekaman per lapangan & sesi (di-ignore Git)
 ├── .env.example             # Template konfigurasi sensitif & environment
 ├── config.example.json      # Template konfigurasi lapangan, overlay, & clipping
-├── requirements.txt         # Daftar package Python (qrcode)
+├── requirements.txt         # Daftar package Python (qrcode, opencv-python-headless, numpy)
 ├── jalankan.bat             # Launcher cepat untuk Windows
 ├── PANDUAN.txt              # Panduan teknis penggunaan lapangan & RTSP
 └── README.md                # Dokumentasi utama project

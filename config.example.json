@@ -5,6 +5,17 @@
     "post_roll_seconds": 4,
     "create_reel": true
   },
+  "auto_clipping": {
+    "enabled": true,
+    "sensitivity": 0.5,
+    "max_clips": 5,
+    "pre_roll_seconds": 10,
+    "post_roll_seconds": 4,
+    "min_gap_seconds": 15,
+    "output_format": "landscape",
+    "crop_focus": "center",
+    "create_reel": true
+  },
   "storage": {
     "retention_days": 7,
     "min_free_gb": 15

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   Tv, Camera, Video, Settings, LogOut, Users, Play, Square, 
   RefreshCw, CheckCircle2, AlertTriangle, Shield, Eye, Plus, Trash2, Sliders, Clock, Lock, RotateCcw,
-  Film, QrCode, Download, ExternalLink, Scissors, Check, Copy, Heart
+  Film, QrCode, Download, ExternalLink, Scissors, Check, Copy, Heart, Sparkles
 } from 'lucide-react';
 
 const MODE_HINTS = {
@@ -567,6 +567,14 @@ export default function DashboardView({ navigate }) {
         </div>
 
         <div className="flex items-center gap-3">
+          <button
+            onClick={() => navigate('/auto-clip')}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-padel-volt hover:bg-padel-voltHover text-black text-xs sm:text-sm font-score font-bold uppercase tracking-wider shadow-md shadow-padel-volt/20 transition-all"
+            title="Buka halaman khusus Auto-Clip AI"
+          >
+            <Sparkles className="w-4 h-4" />
+            <span>Auto-Clip AI</span>
+          </button>
           <button
             onClick={fetchStatus}
             className="p-2.5 rounded-xl bg-padel-card hover:bg-padel-border/60 text-slate-300 hover:text-white transition-colors"
@@ -1621,16 +1629,27 @@ export default function DashboardView({ navigate }) {
                       </span>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => handleTriggerClipping(mediaCourtId, selectedMediaSession?.folder, modalPreRoll, modalPostRoll)}
-                      disabled={isClipping}
-                      className="px-3.5 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold flex items-center gap-1.5 transition-all disabled:opacity-50 shadow-md shadow-purple-600/30"
-                      title={`Potong ulang dengan durasi ${modalPreRoll}s awal + ${modalPostRoll}s akhir`}
-                    >
-                      <Scissors className={`w-3.5 h-3.5 ${isClipping ? 'animate-spin' : ''}`} />
-                      <span>{isClipping ? 'Sedang Memotong...' : 'Potong Ulang Klip'}</span>
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => { setShowMediaModal(false); navigate('/auto-clip'); }}
+                        className="px-3 py-1.5 rounded-xl bg-padel-volt/15 hover:bg-padel-volt/25 border border-padel-volt/40 text-padel-volt text-xs font-semibold flex items-center gap-1.5 transition-all"
+                        title="Proses klip otomatis di halaman Studio Auto-Clip AI"
+                      >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>Studio Auto-Clip AI</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleTriggerClipping(mediaCourtId, selectedMediaSession?.folder, modalPreRoll, modalPostRoll)}
+                        disabled={isClipping}
+                        className="px-3.5 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold flex items-center gap-1.5 transition-all disabled:opacity-50 shadow-md shadow-purple-600/30"
+                        title={`Potong ulang dengan durasi ${modalPreRoll}s awal + ${modalPostRoll}s akhir`}
+                      >
+                        <Scissors className={`w-3.5 h-3.5 ${isClipping ? 'animate-spin' : ''}`} />
+                        <span>{isClipping ? 'Sedang Memotong...' : 'Potong Ulang Klip'}</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
 

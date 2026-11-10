@@ -48,6 +48,18 @@ CLIPPING_DEFAULT = {
     "create_reel": True,
 }
 
+AUTO_CLIPPING_DEFAULT = {
+    "enabled": True,
+    "sensitivity": 0.5,
+    "max_clips": 5,
+    "pre_roll_seconds": 10.0,
+    "post_roll_seconds": 4.0,
+    "min_gap_seconds": 15,
+    "output_format": "landscape",  # "landscape" (16:9) | "vertical" (9:16) | "square" (1:1)
+    "crop_focus": "center",        # "left" | "center" | "right"
+    "create_reel": True,
+}
+
 STORAGE_DEFAULT = {
     "retention_days": 7,
     "min_free_gb": 15.0,
@@ -203,6 +215,7 @@ def _default_json_config() -> dict:
     """Struktur default config.json non-sensitif."""
     return {
         "clipping": dict(CLIPPING_DEFAULT),
+        "auto_clipping": dict(AUTO_CLIPPING_DEFAULT),
         "storage": dict(STORAGE_DEFAULT),
         "courts": [
             {
@@ -283,10 +296,14 @@ def load_config() -> dict:
     cfg["ffmpeg"] = get_env("FFMPEG_PATH").strip() or cfg.get("ffmpeg", GLOBAL_DEFAULTS["ffmpeg"])
     cfg["ffprobe"] = get_env("FFPROBE_PATH").strip() or cfg.get("ffprobe", GLOBAL_DEFAULTS["ffprobe"])
 
-    # Clipping & Storage defaults
+    # Clipping, Auto-Clipping & Storage defaults
     clip_cfg = dict(CLIPPING_DEFAULT)
     clip_cfg.update(cfg.get("clipping") or {})
     cfg["clipping"] = clip_cfg
+
+    auto_cfg = dict(AUTO_CLIPPING_DEFAULT)
+    auto_cfg.update(cfg.get("auto_clipping") or {})
+    cfg["auto_clipping"] = auto_cfg
 
     storage_cfg = dict(STORAGE_DEFAULT)
     storage_cfg.update(cfg.get("storage") or {})
@@ -490,6 +507,15 @@ def save_clipping_settings(clip_cfg: dict):
     CFG["clipping"] = clip_cfg
 
 
+def save_auto_clipping_settings(auto_cfg: dict):
+    """Simpan pengaturan Auto-Clip AI ke `config.json`."""
+    merged = dict(AUTO_CLIPPING_DEFAULT)
+    merged.update(CFG.get("auto_clipping") or {})
+    merged.update(auto_cfg or {})
+    _update_json_config(lambda raw: raw.__setitem__("auto_clipping", merged))
+    CFG["auto_clipping"] = merged
+
+
 def save_admin_password_hash(new_hash: str):
     """Simpan hash password admin ke `.env` dan bersihkan plaintext jika ada."""
     set_env_vars({"ADMIN_PASSWORD_HASH": new_hash}, remove_keys=["ADMIN_PASSWORD"])
@@ -531,4 +557,5 @@ def get_safe_public_config() -> dict:
         safe_courts.append(cc)
     safe_cfg["courts"] = safe_courts
     safe_cfg["clipping"] = CFG.get("clipping", dict(CLIPPING_DEFAULT))
+    safe_cfg["auto_clipping"] = CFG.get("auto_clipping", dict(AUTO_CLIPPING_DEFAULT))
     return safe_cfg

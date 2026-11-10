@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import LoginView from './components/LoginView.jsx';
 import DashboardView from './components/DashboardView.jsx';
 import CourtView from './components/CourtView.jsx';
+import AutoClipView from './components/AutoClipView.jsx';
 
 export default function App() {
   const [currentPath, setCurrentPath] = useState(window.location.pathname);
@@ -20,6 +21,10 @@ export default function App() {
   // Route parser
   if (currentPath === '/dashboard') {
     return <DashboardView navigate={navigate} />;
+  }
+
+  if (currentPath === '/auto-clip') {
+    return <AutoClipView navigate={navigate} />;
   }
 
   const courtMatch = currentPath.match(/\/court\/(\d+)/);

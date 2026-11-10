@@ -6,10 +6,11 @@ import os
 import re
 import shutil
 import sys
+import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from backend import clipper, overlay
+from backend import auto_clipper, clipper, overlay
 from backend.auth import check_auth, handle_login, handle_logout
 from backend.cleanup import (
     clear_remote_signals,
@@ -22,6 +23,7 @@ from backend.config import (
     CFG,
     get_safe_public_config,
     save_admin_password_hash,
+    save_auto_clipping_settings,
     save_clipping_settings,
     save_court_pin_hash,
     save_server_ip,
@@ -32,6 +34,9 @@ from backend.media import generate_qr_svg, get_court_media, serve_file_with_rang
 from backend.network import get_all_lan_ips, get_base_url, get_local_ip, local_ips
 from backend.recorder import SESSIONS, add_camera, init_sessions, remove_camera
 from tools import cari_kamera
+
+_auto_clip_lock = threading.Lock()
+_auto_clip_progress = {}  # str(court_id) -> {"status": ..., "pct": int, "msg": ..., "folder": ...}
 
 STATIC_MIME_TYPES = {
     ".js": "application/javascript",
@@ -122,6 +127,13 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/dashboard":
             if not check_auth(self, required_role="admin"):
                 self._redirect("/login?next=/dashboard")
+                return
+            self._html(spa_entry if has_spa else os.path.join(BASE, "web", "dashboard.html"))
+            return
+
+        if path == "/auto-clip":
+            if not check_auth(self, required_role="admin"):
+                self._redirect("/login?next=/auto-clip")
                 return
             self._html(spa_entry if has_spa else os.path.join(BASE, "web", "dashboard.html"))
             return
@@ -243,7 +255,19 @@ class Handler(BaseHTTPRequestHandler):
             if not check_auth(self, required_role="admin"):
                 self._json({"error": "unauthorized"}, 401)
                 return
-            self._json({"ok": True, "config": get_safe_public_config()})
+            self._json({"ok": True, "config": get_safe_public_config(), "cv2_available": auto_clipper.CV2_AVAILABLE})
+            return
+
+        m = re.match(r"^/api/admin/auto-clip-progress/(\d+)$", path)
+        if m:
+            if not check_auth(self, required_role="admin"):
+                self._json({"error": "unauthorized"}, 401)
+                return
+            cid_key = m.group(1)
+            with _auto_clip_lock:
+                prog = dict(_auto_clip_progress.get(cid_key, {"status": "idle", "pct": 0, "msg": ""}))
+            prog["cv2_available"] = auto_clipper.CV2_AVAILABLE
+            self._json(prog)
             return
 
         self._json({"error": "not found"}, 404)
@@ -304,6 +328,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(s.reset_match())
         elif action == "create-clips":
             self._handle_create_clips(cid, s, data)
+        elif action == "auto-clip":
+            self._handle_auto_clip(cid, s, data)
         elif action == "test":
             self._json(s.test())
         elif action == "discover":
@@ -321,20 +347,42 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._json({"error": "not found"}, 404)
 
-    def _handle_create_clips(self, cid: int, session, data: dict):
+    def _resolve_session_video(self, cid: int, session, data: dict):
+        """Resolusi folder sesi rekaman dan file video target (raw/skor/main)."""
         sessions = get_court_media(cid)
         if not sessions:
             self._json({"error": "Tidak ada rekaman"}, 404)
-            return
+            return None, None
         req_folder = data.get("folder")
         target_sess = next((x for x in sessions if x["folder"] == req_folder), None) if req_folder else sessions[0]
-        if not target_sess or not target_sess.get("main_video"):
-            self._json({"error": "Sesi rekaman atau video tidak ditemukan"}, 404)
-            return
-        target_video = os.path.join(session._cfg["output_dir"], target_sess["folder"], target_sess["main_video"])
+        if not target_sess:
+            self._json({"error": "Sesi rekaman tidak ditemukan"}, 404)
+            return None, None
+
+        pref = (data.get("source_video") or "").lower().strip()
+        if pref == "raw" and target_sess.get("raw_video"):
+            vid_name = target_sess["raw_video"]
+        elif pref == "skor" and target_sess.get("skor_video"):
+            vid_name = target_sess["skor_video"]
+        else:
+            vid_name = target_sess.get("main_video") or target_sess.get("raw_video")
+
+        if not vid_name:
+            self._json({"error": "Video tidak ditemukan pada sesi ini"}, 404)
+            return None, None
+
+        session_dir = os.path.join(session._cfg["output_dir"], target_sess["folder"])
+        target_video = os.path.join(session_dir, vid_name)
         if not os.path.isfile(target_video):
             self._json({"error": "File video tidak ditemukan"}, 404)
+            return None, None
+        return target_sess, (session_dir, target_video)
+
+    def _handle_create_clips(self, cid: int, session, data: dict):
+        target_sess, resolved = self._resolve_session_video(cid, session, data)
+        if not target_sess:
             return
+        _, target_video = resolved
 
         pre_roll = data.get("pre_roll")
         post_roll = data.get("post_roll")
@@ -349,6 +397,88 @@ class Handler(BaseHTTPRequestHandler):
             create_reel=data.get("create_reel"),
         )
         self._json({"ok": True, "result": res})
+
+    def _handle_auto_clip(self, cid: int, session, data: dict):
+        if not auto_clipper.CV2_AVAILABLE:
+            self._json({
+                "ok": False,
+                "error": "OpenCV/NumPy belum tersedia di server. Jalankan: pip install -r requirements.txt",
+            }, 500)
+            return
+
+        cid_key = str(cid)
+        with _auto_clip_lock:
+            curr = _auto_clip_progress.get(cid_key, {})
+            if curr.get("status") == "running":
+                self._json({"ok": False, "error": "Auto-Clip AI masih berjalan untuk lapangan ini"}, 409)
+                return
+
+        target_sess, resolved = self._resolve_session_video(cid, session, data)
+        if not target_sess:
+            return
+        session_dir, target_video = resolved
+
+        auto_cfg = CFG.get("auto_clipping", {})
+        sensitivity = float(data.get("sensitivity", auto_cfg.get("sensitivity", 0.5)))
+        max_clips = int(data.get("max_clips", auto_cfg.get("max_clips", 5)))
+        pre_roll = data.get("pre_roll")
+        post_roll = data.get("post_roll")
+        min_gap = data.get("min_gap")
+        output_format = data.get("output_format", auto_cfg.get("output_format", "landscape"))
+        crop_focus = data.get("crop_focus", auto_cfg.get("crop_focus", "center"))
+        create_reel = data.get("create_reel", auto_cfg.get("create_reel", True))
+
+        with _auto_clip_lock:
+            _auto_clip_progress[cid_key] = {
+                "status": "running",
+                "pct": 0,
+                "msg": "Memulai analisis video...",
+                "folder": target_sess["folder"],
+            }
+
+        def _run_job():
+            def _progress(pct, msg=""):
+                with _auto_clip_lock:
+                    _auto_clip_progress[cid_key] = {
+                        "status": "running",
+                        "pct": round(pct * 100),
+                        "msg": msg,
+                        "folder": target_sess["folder"],
+                    }
+
+            result = auto_clipper.run_auto_clip(
+                video_path=target_video,
+                session_folder=session_dir,
+                cfg=dict(CFG),
+                max_clips=max_clips,
+                sensitivity=sensitivity,
+                pre_roll=float(pre_roll) if pre_roll is not None and str(pre_roll).strip() != "" else None,
+                post_roll=float(post_roll) if post_roll is not None and str(post_roll).strip() != "" else None,
+                min_gap=int(min_gap) if min_gap is not None and str(min_gap).strip() != "" else None,
+                output_format=output_format,
+                crop_focus=crop_focus,
+                create_reel=bool(create_reel),
+                progress_cb=_progress,
+            )
+            with _auto_clip_lock:
+                if result.get("success"):
+                    _auto_clip_progress[cid_key] = {
+                        "status": "done",
+                        "pct": 100,
+                        "msg": result.get("message", "Auto-Clip selesai!"),
+                        "folder": target_sess["folder"],
+                        "result": result,
+                    }
+                else:
+                    _auto_clip_progress[cid_key] = {
+                        "status": "error",
+                        "pct": 0,
+                        "msg": result.get("error", "Gagal memproses Auto-Clip"),
+                        "folder": target_sess["folder"],
+                    }
+
+        threading.Thread(target=_run_job, daemon=True).start()
+        self._json({"ok": True, "message": "Proses Auto-Clip AI dimulai di background", "folder": target_sess["folder"]})
 
     def _handle_admin_post(self, path: str, data: dict):
         if not check_auth(self, required_role="admin"):
@@ -404,6 +534,28 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": True, "clipping": clip_cfg})
             return
 
+        if path == "/api/admin/set-auto-clipping":
+            fmt = str(data.get("output_format", "landscape")).lower().strip()
+            if fmt not in ("landscape", "vertical", "square"):
+                fmt = "landscape"
+            focus = str(data.get("crop_focus", "center")).lower().strip()
+            if focus not in ("left", "center", "right"):
+                focus = "center"
+            auto_cfg = {
+                "enabled": bool(data.get("enabled", True)),
+                "sensitivity": max(0.0, min(1.0, float(data.get("sensitivity", 0.5)))),
+                "max_clips": max(1, min(50, int(data.get("max_clips", 5)))),
+                "pre_roll_seconds": max(1.0, float(data.get("pre_roll_seconds", 10.0))),
+                "post_roll_seconds": max(1.0, float(data.get("post_roll_seconds", 4.0))),
+                "min_gap_seconds": max(3, int(data.get("min_gap_seconds", 15))),
+                "output_format": fmt,
+                "crop_focus": focus,
+                "create_reel": bool(data.get("create_reel", True)),
+            }
+            save_auto_clipping_settings(auto_cfg)
+            self._json({"ok": True, "auto_clipping": auto_cfg})
+            return
+
         self._json({"error": "not found"}, 404)
 
 
@@ -436,6 +588,7 @@ def run(argv=None):
     print(" Papan Skor Padel + CCTV — Multi-Lapangan")
     print(f" Login Admin  : http://localhost:{port}/login")
     print(f" Dashboard    : http://localhost:{port}/dashboard")
+    print(f" Auto-Clip AI : http://localhost:{port}/auto-clip")
     for c in CFG.get("courts", []):
         print(f" {c.get('name', 'Lapangan'):12s} : http://localhost:{port}/court/{c.get('id')}")
     for ip in local_ips():
