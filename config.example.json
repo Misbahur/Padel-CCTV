@@ -7,7 +7,10 @@
   },
   "auto_clipping": {
     "enabled": true,
+    "detection_mode": "motion_audio",
     "sensitivity": 0.5,
+    "sensitivity_motion": 0.5,
+    "sensitivity_audio": 0.5,
     "max_clips": 5,
     "pre_roll_seconds": 10,
     "post_roll_seconds": 4,

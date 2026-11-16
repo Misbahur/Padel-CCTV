@@ -20,7 +20,7 @@ Aplikasi papan skor padel digital multi-lapangan terintegrasi dengan perekam CCT
 - **Video Overlay Skor, Klip Highlight (Love ❤️) & Studio Auto-Clip AI**:
   - Render subtitle ASS bergaya siaran TV secara otomatis menjadi file `*_skor.mp4`.
   - Tandai momen seru selama pertandingan menggunakan tombol **Love ❤️** pada remote, dengan durasi **pre-roll** dan **post-roll** yang bisa dikustomisasi dari Dashboard Admin maupun modal media.
-  - **Studio Auto-Clip AI** (`/auto-clip`): halaman khusus terpisah dari proses selesai pertandingan untuk mengekstrak momen reli intensitas tinggi secara otomatis (OpenCV + NumPy), dilengkapi pengaturan target jumlah klip (default `5`), sensitivitas, durasi, serta format output **Landscape 16:9**, **Vertical 9:16 (Reels/TikTok)**, atau **Square 1:1**.
+  - **Studio Auto-Clip AI (Fase 2 Multi-Modal)** (`/auto-clip`): halaman khusus terpisah dari proses selesai pertandingan untuk mengekstrak momen terbaik secara otomatis berbasis kombinasi visual reli (OpenCV) dan hentakan audio (FFmpeg) untuk mendeteksi smash & sorakan. Dilengkapi **Auto-Fallback** otomatis bila audio hening/tanpa mic, fitur **Upload Video Mandiri** (MP4/MOV), slider sensitivitas gerak & audio, pengaturan target jumlah klip (default `5`), serta format output **Landscape 16:9**, **Vertical 9:16 (Reels/TikTok)**, atau **Square 1:1**.
 - **Berbagi Video via QR Code (LAN)**:
   - Generate QR Code otomatis menggunakan **IP LAN lokal server** (bukan `localhost`), dengan deteksi IP otomatis maupun override manual di Dashboard.
   - Halaman mobile `/share/<court_id>/<folder>` agar pemain bisa langsung menonton & mengunduh video/klip dari HP di Wi-Fi yang sama.

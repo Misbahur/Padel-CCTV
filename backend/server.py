@@ -8,6 +8,7 @@ import shutil
 import sys
 import threading
 import urllib.parse
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from backend import auto_clipper, clipper, overlay
@@ -30,7 +31,7 @@ from backend.config import (
     sha256,
     update_admin_court_configs,
 )
-from backend.media import generate_qr_svg, get_court_media, serve_file_with_range
+from backend.media import generate_qr_svg, get_court_media, get_upload_media, serve_file_with_range
 from backend.network import get_all_lan_ips, get_base_url, get_local_ip, local_ips
 from backend.recorder import SESSIONS, add_camera, init_sessions, remove_camera
 from tools import cari_kamera
@@ -258,7 +259,14 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": True, "config": get_safe_public_config(), "cv2_available": auto_clipper.CV2_AVAILABLE})
             return
 
-        m = re.match(r"^/api/admin/auto-clip-progress/(\d+)$", path)
+        if path == "/api/uploads":
+            if not check_auth(self, required_role="admin"):
+                self._json({"error": "unauthorized"}, 401)
+                return
+            self._json({"ok": True, "uploads": get_upload_media()})
+            return
+
+        m = re.match(r"^/api/admin/auto-clip-progress/([a-zA-Z0-9_-]+)$", path)
         if m:
             if not check_auth(self, required_role="admin"):
                 self._json({"error": "unauthorized"}, 401)
@@ -275,6 +283,10 @@ class Handler(BaseHTTPRequestHandler):
     # ── POST dispatcher ──────────────────────────────────────────────────
     def do_POST(self):
         path = self.path.split("?")[0]
+        if path == "/api/upload-video":
+            self._handle_upload_video()
+            return
+
         data = self._read_body()
 
         if path == "/api/auth/login":
@@ -287,6 +299,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/auth/logout":
             handle_logout(self)
             self._json({"ok": True}, extra_headers={"Set-Cookie": "sid=; Path=/; HttpOnly; Max-Age=0"})
+            return
+
+        if path == "/api/upload/auto-clip":
+            self._handle_upload_auto_clip(data)
+            return
+
+        if path == "/api/upload/delete":
+            self._handle_upload_delete(data)
             return
 
         m = re.match(r"^/api/court/(\d+)/(.+)$", path)
@@ -419,7 +439,10 @@ class Handler(BaseHTTPRequestHandler):
         session_dir, target_video = resolved
 
         auto_cfg = CFG.get("auto_clipping", {})
+        detection_mode = data.get("detection_mode", auto_cfg.get("detection_mode", "motion_audio"))
         sensitivity = float(data.get("sensitivity", auto_cfg.get("sensitivity", 0.5)))
+        sensitivity_motion = float(data.get("sensitivity_motion", auto_cfg.get("sensitivity_motion", sensitivity)))
+        sensitivity_audio = float(data.get("sensitivity_audio", auto_cfg.get("sensitivity_audio", sensitivity)))
         max_clips = int(data.get("max_clips", auto_cfg.get("max_clips", 5)))
         pre_roll = data.get("pre_roll")
         post_roll = data.get("post_roll")
@@ -450,8 +473,11 @@ class Handler(BaseHTTPRequestHandler):
                 video_path=target_video,
                 session_folder=session_dir,
                 cfg=dict(CFG),
+                detection_mode=detection_mode,
                 max_clips=max_clips,
                 sensitivity=sensitivity,
+                sensitivity_motion=sensitivity_motion,
+                sensitivity_audio=sensitivity_audio,
                 pre_roll=float(pre_roll) if pre_roll is not None and str(pre_roll).strip() != "" else None,
                 post_roll=float(post_roll) if post_roll is not None and str(post_roll).strip() != "" else None,
                 min_gap=int(min_gap) if min_gap is not None and str(min_gap).strip() != "" else None,
@@ -479,6 +505,193 @@ class Handler(BaseHTTPRequestHandler):
 
         threading.Thread(target=_run_job, daemon=True).start()
         self._json({"ok": True, "message": "Proses Auto-Clip AI dimulai di background", "folder": target_sess["folder"]})
+
+    def _handle_upload_video(self):
+        if not check_auth(self, required_role="admin"):
+            self._json({"error": "unauthorized"}, 401)
+            return
+
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        raw_name = query.get("filename", ["video.mp4"])[0]
+        safe_name = os.path.basename(raw_name)
+        safe_name = re.sub(r"[^\w\.\-\ ]", "_", safe_name).strip()
+        if not safe_name:
+            safe_name = "video.mp4"
+        ext = os.path.splitext(safe_name)[1].lower()
+        if ext not in (".mp4", ".mov", ".mkv", ".webm", ".avi"):
+            safe_name += ".mp4"
+
+        clean_slug = os.path.splitext(safe_name)[0]
+        clean_slug = re.sub(r"\s+", "-", clean_slug)[:40]
+        now_tag = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        folder_name = f"{now_tag}_{clean_slug}"
+        upload_base = os.path.normpath(os.path.join(BASE, "rekaman", "uploads"))
+        dest_dir = os.path.join(upload_base, folder_name)
+        os.makedirs(dest_dir, exist_ok=True)
+        dest_file = os.path.join(dest_dir, safe_name)
+
+        content_len = int(self.headers.get("Content-Length") or 0)
+        if content_len <= 0:
+            self._json({"error": "Ukuran file kosong atau Content-Length tidak valid"}, 400)
+            return
+
+        try:
+            with open(dest_file, "wb") as f:
+                remaining = content_len
+                while remaining > 0:
+                    chunk = self.rfile.read(min(remaining, 65536))
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    remaining -= len(chunk)
+
+            if not os.path.isfile(dest_file) or os.path.getsize(dest_file) < 1024:
+                shutil.rmtree(dest_dir, ignore_errors=True)
+                self._json({"error": "Gagal menyimpan file video"}, 500)
+                return
+
+            size_mb = round(os.path.getsize(dest_file) / (1024 * 1024), 2)
+            _, ffprobe = clipper.find_ff_tools(dict(CFG))
+            dur = clipper.probe_duration(dest_file, ffprobe)
+
+            self._json({
+                "ok": True,
+                "message": "Video berhasil diunggah!",
+                "folder": folder_name,
+                "filename": safe_name,
+                "size_mb": size_mb,
+                "duration": round(dur, 1),
+            })
+        except Exception as exc:
+            shutil.rmtree(dest_dir, ignore_errors=True)
+            self._json({"error": f"Error saat mengunggah: {exc}"}, 500)
+
+    def _handle_upload_auto_clip(self, data: dict):
+        if not check_auth(self, required_role="admin"):
+            self._json({"error": "unauthorized"}, 401)
+            return
+
+        if not auto_clipper.CV2_AVAILABLE:
+            self._json({
+                "ok": False,
+                "error": "OpenCV/NumPy belum tersedia di server. Jalankan: pip install -r requirements.txt",
+            }, 500)
+            return
+
+        folder_name = data.get("folder", "").strip()
+        if not folder_name or ".." in folder_name:
+            self._json({"error": "Folder upload tidak valid"}, 400)
+            return
+
+        upload_base = os.path.normpath(os.path.join(BASE, "rekaman", "uploads"))
+        dest_dir = os.path.normpath(os.path.join(upload_base, folder_name))
+        if not dest_dir.startswith(upload_base) or not os.path.isdir(dest_dir):
+            self._json({"error": "Folder upload tidak ditemukan"}, 404)
+            return
+
+        files = os.listdir(dest_dir)
+        target_video = None
+        for f in files:
+            if f.endswith(".mp4") and "_auto_klip_" not in f and "_auto_reel" not in f:
+                target_video = os.path.join(dest_dir, f)
+                break
+        if not target_video or not os.path.isfile(target_video):
+            self._json({"error": "File video tidak ditemukan di folder upload"}, 404)
+            return
+
+        cid_key = "upload"
+        with _auto_clip_lock:
+            curr = _auto_clip_progress.get(cid_key, {})
+            if curr.get("status") == "running":
+                self._json({"ok": False, "error": "Auto-Clip AI untuk video upload masih berjalan"}, 409)
+                return
+
+        auto_cfg = CFG.get("auto_clipping", {})
+        detection_mode = data.get("detection_mode", auto_cfg.get("detection_mode", "motion_audio"))
+        sensitivity = float(data.get("sensitivity", auto_cfg.get("sensitivity", 0.5)))
+        sensitivity_motion = float(data.get("sensitivity_motion", auto_cfg.get("sensitivity_motion", sensitivity)))
+        sensitivity_audio = float(data.get("sensitivity_audio", auto_cfg.get("sensitivity_audio", sensitivity)))
+        max_clips = int(data.get("max_clips", auto_cfg.get("max_clips", 5)))
+        pre_roll = data.get("pre_roll")
+        post_roll = data.get("post_roll")
+        min_gap = data.get("min_gap")
+        output_format = data.get("output_format", auto_cfg.get("output_format", "landscape"))
+        crop_focus = data.get("crop_focus", auto_cfg.get("crop_focus", "center"))
+        create_reel = data.get("create_reel", auto_cfg.get("create_reel", True))
+
+        with _auto_clip_lock:
+            _auto_clip_progress[cid_key] = {
+                "status": "running",
+                "pct": 0,
+                "msg": "Memulai analisis video upload...",
+                "folder": folder_name,
+            }
+
+        def _run_upload_job():
+            def _progress(pct, msg=""):
+                with _auto_clip_lock:
+                    _auto_clip_progress[cid_key] = {
+                        "status": "running",
+                        "pct": round(pct * 100),
+                        "msg": msg,
+                        "folder": folder_name,
+                    }
+
+            result = auto_clipper.run_auto_clip(
+                video_path=target_video,
+                session_folder=dest_dir,
+                cfg=dict(CFG),
+                detection_mode=detection_mode,
+                max_clips=max_clips,
+                sensitivity=sensitivity,
+                sensitivity_motion=sensitivity_motion,
+                sensitivity_audio=sensitivity_audio,
+                pre_roll=float(pre_roll) if pre_roll is not None and str(pre_roll).strip() != "" else None,
+                post_roll=float(post_roll) if post_roll is not None and str(post_roll).strip() != "" else None,
+                min_gap=int(min_gap) if min_gap is not None and str(min_gap).strip() != "" else None,
+                output_format=output_format,
+                crop_focus=crop_focus,
+                create_reel=bool(create_reel),
+                progress_cb=_progress,
+            )
+            with _auto_clip_lock:
+                if result.get("success"):
+                    _auto_clip_progress[cid_key] = {
+                        "status": "done",
+                        "pct": 100,
+                        "msg": result.get("message", "Auto-Clip video upload selesai!"),
+                        "folder": folder_name,
+                        "result": result,
+                    }
+                else:
+                    _auto_clip_progress[cid_key] = {
+                        "status": "error",
+                        "pct": 0,
+                        "msg": result.get("error", "Gagal memproses Auto-Clip"),
+                        "folder": folder_name,
+                    }
+
+        threading.Thread(target=_run_upload_job, daemon=True).start()
+        self._json({"ok": True, "message": "Proses Auto-Clip dimulai di background", "folder": folder_name})
+
+    def _handle_upload_delete(self, data: dict):
+        if not check_auth(self, required_role="admin"):
+            self._json({"error": "unauthorized"}, 401)
+            return
+        folder_name = data.get("folder", "").strip()
+        if not folder_name or ".." in folder_name:
+            self._json({"error": "Folder upload tidak valid"}, 400)
+            return
+        upload_base = os.path.normpath(os.path.join(BASE, "rekaman", "uploads"))
+        dest_dir = os.path.normpath(os.path.join(upload_base, folder_name))
+        if not dest_dir.startswith(upload_base) or not os.path.isdir(dest_dir):
+            self._json({"error": "Folder upload tidak ditemukan"}, 404)
+            return
+        try:
+            shutil.rmtree(dest_dir)
+            self._json({"ok": True, "message": "Video upload berhasil dihapus"})
+        except Exception as e:
+            self._json({"ok": False, "error": str(e)}, 500)
 
     def _handle_admin_post(self, path: str, data: dict):
         if not check_auth(self, required_role="admin"):
@@ -535,15 +748,24 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/admin/set-auto-clipping":
+            mode = str(data.get("detection_mode", "motion_audio")).lower().strip()
+            if mode not in ("motion_audio", "motion", "audio"):
+                mode = "motion_audio"
             fmt = str(data.get("output_format", "landscape")).lower().strip()
             if fmt not in ("landscape", "vertical", "square"):
                 fmt = "landscape"
             focus = str(data.get("crop_focus", "center")).lower().strip()
             if focus not in ("left", "center", "right"):
                 focus = "center"
+            sens = max(0.0, min(1.0, float(data.get("sensitivity", 0.5))))
+            sens_m = max(0.0, min(1.0, float(data.get("sensitivity_motion", sens))))
+            sens_a = max(0.0, min(1.0, float(data.get("sensitivity_audio", sens))))
             auto_cfg = {
                 "enabled": bool(data.get("enabled", True)),
-                "sensitivity": max(0.0, min(1.0, float(data.get("sensitivity", 0.5)))),
+                "detection_mode": mode,
+                "sensitivity": sens,
+                "sensitivity_motion": sens_m,
+                "sensitivity_audio": sens_a,
                 "max_clips": max(1, min(50, int(data.get("max_clips", 5)))),
                 "pre_roll_seconds": max(1.0, float(data.get("pre_roll_seconds", 10.0))),
                 "post_roll_seconds": max(1.0, float(data.get("post_roll_seconds", 4.0))),

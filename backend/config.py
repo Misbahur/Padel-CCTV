@@ -50,7 +50,10 @@ CLIPPING_DEFAULT = {
 
 AUTO_CLIPPING_DEFAULT = {
     "enabled": True,
+    "detection_mode": "motion_audio",  # "motion_audio" (gerakan+suara) | "motion" (gerakan saja) | "audio" (suara saja)
     "sensitivity": 0.5,
+    "sensitivity_motion": 0.5,
+    "sensitivity_audio": 0.5,
     "max_clips": 5,
     "pre_roll_seconds": 10.0,
     "post_roll_seconds": 4.0,

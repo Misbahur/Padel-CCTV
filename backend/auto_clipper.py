@@ -1,9 +1,10 @@
 """
-Modul Auto-Clip AI (Fase 1 - Deteksi Gerakan Lokal OpenCV + NumPy).
+Modul Auto-Clip AI (Fase 2 - Deteksi Gerakan Visual + Energi Audio Lokal).
 
 Menganalisis video pertandingan untuk mendeteksi momen reli/gerakan intensitas tinggi
-secara otomatis tanpa mengganggu proses rekaman maupun render skor utama.
-Mendukung pilihan target jumlah klip dan format output (Landscape 16:9, Vertical 9:16, Square 1:1).
+dan lonjakan suara smash/sorakan secara otomatis tanpa mengganggu proses rekaman maupun render skor utama.
+Mendukung pilihan mode deteksi (Gerakan+Suara, Gerakan Saja, Suara Saja), auto-fallback bila audio bisu,
+pilihan target jumlah klip, dan format output (Landscape 16:9, Vertical 9:16, Square 1:1).
 """
 from datetime import datetime
 import json
@@ -24,6 +25,7 @@ except ImportError as exc:
 
 AUTO_KLIP_META = "_auto_klip.json"
 
+DETECTION_MODES = ("motion_audio", "motion", "audio")
 FORMAT_CHOICES = ("landscape", "vertical", "square")
 CROP_FOCUS_MAP = {
     "left": 0.15,
@@ -289,6 +291,141 @@ def find_highlight_peaks(scores: list, sensitivity: float = 0.5, min_gap_sec: in
     return [(times[idx], round(float(prom), 3)) for idx, prom in peaks]
 
 
+def has_audio_stream(video_path: str, ffprobe: str = "ffprobe") -> bool:
+    """Periksa apakah file video memiliki stream audio yang valid."""
+    if not os.path.isfile(video_path):
+        return False
+    cmd = [
+        ffprobe, "-v", "error",
+        "-select_streams", "a",
+        "-show_entries", "stream=codec_name",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        video_path,
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        return bool(proc.stdout.strip())
+    except Exception:
+        return False
+
+
+def compute_audio_scores(
+    video_path: str,
+    ffmpeg: str = "ffmpeg",
+    ffprobe: str = "ffprobe",
+    sample_rate: int = 8000,
+    progress_cb=None,
+) -> tuple:
+    """
+    Ekstrak energi audio per detik (RMS & peak amplitude) menggunakan FFmpeg + NumPy murni.
+    Mendeteksi lonjakan suara keras (smash, pantulan kaca, sorakan).
+    Mengembalikan (scores, meta) di mana:
+      scores = list tuple (detik, skor_audio 0.0 - 1.0)
+      meta = {"has_audio": bool, "is_silent": bool, "max_rms": float, "mean_rms": float}
+    """
+    empty_meta = {"has_audio": False, "is_silent": True, "max_rms": 0.0, "mean_rms": 0.0}
+    if not has_audio_stream(video_path, ffprobe):
+        return [], empty_meta
+
+    cmd = [
+        ffmpeg, "-hide_banner", "-loglevel", "error",
+        "-i", video_path,
+        "-vn", "-ac", "1", "-ar", str(sample_rate),
+        "-f", "s16le", "-",
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=300)
+        if proc.returncode != 0 or not proc.stdout:
+            return [], empty_meta
+    except Exception:
+        return [], empty_meta
+
+    samples = np.frombuffer(proc.stdout, dtype=np.int16)
+    if len(samples) < sample_rate:
+        return [], empty_meta
+
+    total_sec = len(samples) // sample_rate
+    rms_arr = np.zeros(total_sec, dtype=float)
+    peak_arr = np.zeros(total_sec, dtype=float)
+
+    for s in range(total_sec):
+        chunk = samples[s * sample_rate : (s + 1) * sample_rate].astype(float)
+        rms_arr[s] = np.sqrt(np.mean(chunk ** 2))
+        peak_arr[s] = np.max(np.abs(chunk))
+
+    max_rms = float(np.max(rms_arr)) if total_sec > 0 else 0.0
+    mean_rms = float(np.mean(rms_arr)) if total_sec > 0 else 0.0
+    std_rms = float(np.std(rms_arr)) if total_sec > 0 else 0.0
+
+    # Deteksi apakah audio hening / mati / mic off
+    is_silent = max_rms < 60.0 or std_rms < 8.0
+
+    if is_silent:
+        return [], {
+            "has_audio": True,
+            "is_silent": True,
+            "max_rms": round(max_rms, 1),
+            "mean_rms": round(mean_rms, 1),
+        }
+
+    def _norm(arr):
+        mn, mx = np.min(arr), np.max(arr)
+        return (arr - mn) / (mx - mn) if (mx - mn) > 1e-6 else np.zeros_like(arr)
+
+    norm_rms = _norm(rms_arr)
+    norm_peak = _norm(peak_arr)
+
+    composite = 0.60 * norm_rms + 0.40 * norm_peak
+    smoothed = _gaussian_smooth(composite, sigma=1.2)
+
+    scores = [(s, round(float(smoothed[s]), 4)) for s in range(total_sec)]
+    return scores, {
+        "has_audio": True,
+        "is_silent": False,
+        "max_rms": round(max_rms, 1),
+        "mean_rms": round(mean_rms, 1),
+    }
+
+
+def combine_scores(
+    motion_scores: list,
+    audio_scores: list,
+    motion_weight: float = 0.5,
+    audio_weight: float = 0.5,
+) -> list:
+    """
+    Gabungkan deret skor gerakan (visual) dan skor audio menjadi satu deret skor komposit.
+    Panjang diselaraskan secara otomatis dengan penyesuaian durasi maksimal.
+    """
+    if not motion_scores and not audio_scores:
+        return []
+    if not audio_scores:
+        return motion_scores
+    if not motion_scores:
+        return audio_scores
+
+    max_sec = max(motion_scores[-1][0], audio_scores[-1][0])
+    m_dict = dict(motion_scores)
+    a_dict = dict(audio_scores)
+
+    m_vals = np.array([m_dict.get(s, 0.0) for s in range(max_sec + 1)], dtype=float)
+    a_vals = np.array([a_dict.get(s, 0.0) for s in range(max_sec + 1)], dtype=float)
+
+    def _minmax(arr):
+        mn, mx = np.min(arr), np.max(arr)
+        return (arr - mn) / (mx - mn) if (mx - mn) > 1e-6 else np.zeros_like(arr)
+
+    norm_m = _minmax(m_vals)
+    norm_a = _minmax(a_vals)
+
+    w_m = max(0.05, float(motion_weight))
+    w_a = max(0.05, float(audio_weight))
+    total_w = w_m + w_a
+
+    combined = (w_m * norm_m + w_a * norm_a) / total_w
+    return [(s, round(float(combined[s]), 4)) for s in range(max_sec + 1)]
+
+
 def _cleanup_old_auto_files(session_folder: str):
     """Hapus hasil auto-klip lama di folder sesi sebelum membuat set baru."""
     try:
@@ -307,7 +444,10 @@ def run_auto_clip(
     session_folder: str,
     cfg: dict,
     max_clips: int = None,
+    detection_mode: str = None,
     sensitivity: float = None,
+    sensitivity_motion: float = None,
+    sensitivity_audio: float = None,
     pre_roll: float = None,
     post_roll: float = None,
     min_gap: int = None,
@@ -317,11 +457,13 @@ def run_auto_clip(
     progress_cb=None,
 ) -> dict:
     """
-    Pipeline utama Auto-Clip AI Fase 1:
-    1. Analisis gerakan video per detik (OpenCV)
-    2. Cari puncak reli terbaik sesuai sensitivitas & target max_clips
-    3. Potong klip via FFmpeg sesuai format (Landscape 16:9 / Vertical 9:16 / Square 1:1)
-    4. Gabungkan menjadi auto-reel (opsional) dan simpan metadata _auto_klip.json
+    Pipeline utama Auto-Clip AI Fase 2:
+    1. Periksa ketersediaan audio & mode deteksi (Gerakan+Suara / Gerakan Saja / Suara Saja)
+    2. Fallback otomatis ke Gerakan Saja jika video tidak memiliki audio / audio hening
+    3. Analisis visual reli (OpenCV) & lonjakan volume audio (FFmpeg)
+    4. Cari puncak momen terbaik sesuai sensitivitas & target max_clips
+    5. Potong klip via FFmpeg sesuai format (Landscape 16:9 / Vertical 9:16 / Square 1:1)
+    6. Gabungkan menjadi auto-reel (opsional) dan simpan metadata _auto_klip.json
     """
     if not CV2_AVAILABLE:
         return {
@@ -336,7 +478,13 @@ def run_auto_clip(
         return {"success": False, "error": f"File video tidak ditemukan: {video_path}"}
 
     auto_cfg = (cfg or {}).get("auto_clipping", {})
+    mode_req = (detection_mode or auto_cfg.get("detection_mode", "motion_audio")).lower().strip()
+    if mode_req not in DETECTION_MODES:
+        mode_req = "motion_audio"
+
     sens = float(sensitivity if sensitivity is not None else auto_cfg.get("sensitivity", 0.5))
+    sens_m = float(sensitivity_motion if sensitivity_motion is not None else auto_cfg.get("sensitivity_motion", sens))
+    sens_a = float(sensitivity_audio if sensitivity_audio is not None else auto_cfg.get("sensitivity_audio", sens))
     limit_clips = max(1, int(max_clips if max_clips is not None else auto_cfg.get("max_clips", 5)))
     pre = max(1.0, float(pre_roll if pre_roll is not None else auto_cfg.get("pre_roll_seconds", 10.0)))
     post = max(1.0, float(post_roll if post_roll is not None else auto_cfg.get("post_roll_seconds", 4.0)))
@@ -352,25 +500,90 @@ def run_auto_clip(
     ffmpeg, ffprobe = find_ff_tools(cfg)
 
     try:
-        if progress_cb:
-            progress_cb(0.02, "Memindai aktivitas gerakan di video...")
+        has_audio = False
+        is_silent = False
+        fallback_applied = False
+        fallback_reason = ""
+        actual_mode = mode_req
 
-        scores = compute_motion_scores(
-            video_path,
-            sample_fps=3.0,
-            progress_cb=lambda p: progress_cb(0.02 + p * 0.53, "Menganalisis intensitas gerakan...") if progress_cb else None,
-        )
+        audio_scores = []
+        audio_meta = {}
+
+        # ── 1. Analisis Audio (bila mode motion_audio atau audio) ────────
+        if mode_req in ("motion_audio", "audio"):
+            if progress_cb:
+                progress_cb(0.04, "Menganalisis spektrum energi suara (smash & sorakan)...")
+            audio_scores, audio_meta = compute_audio_scores(
+                video_path,
+                ffmpeg=ffmpeg,
+                ffprobe=ffprobe,
+                sample_rate=8000,
+            )
+            has_audio = audio_meta.get("has_audio", False)
+            is_silent = audio_meta.get("is_silent", True)
+
+            if not has_audio or is_silent:
+                fallback_applied = True
+                if not has_audio:
+                    fallback_reason = "Video tidak memiliki track audio. Analisis otomatis dialihkan ke Gerakan Saja."
+                else:
+                    fallback_reason = "Audio terdeteksi hening/tanpa mic aktif. Analisis otomatis dialihkan ke Gerakan Saja."
+                actual_mode = "motion"
+
+        # ── 2. Analisis Gerakan Visual (bila mode motion_audio atau motion) ──
+        motion_scores = []
+        if actual_mode in ("motion_audio", "motion"):
+            start_pct = 0.12 if mode_req == "motion_audio" else 0.04
+            end_pct = 0.52
+            if progress_cb:
+                progress_cb(start_pct, "Memindai pergerakan visual pemain di video (OpenCV)...")
+            motion_scores = compute_motion_scores(
+                video_path,
+                sample_fps=3.0,
+                progress_cb=lambda p: progress_cb(
+                    start_pct + p * (end_pct - start_pct),
+                    "Menganalisis intensitas reli dan kecepatan bola...",
+                ) if progress_cb else None,
+            )
+            if not motion_scores:
+                return {"success": False, "error": "Gagal membaca frame visual dari video sumber"}
+
+        # ── 3. Penyatuan Skor Sesuai Mode ─────────────────────────────────
+        if actual_mode == "motion_audio":
+            if progress_cb:
+                progress_cb(0.54, "Menggabungkan intensitas reli visual dan hentakan audio...")
+            scores = combine_scores(
+                motion_scores=motion_scores,
+                audio_scores=audio_scores,
+                motion_weight=sens_m,
+                audio_weight=sens_a,
+            )
+        elif actual_mode == "audio":
+            scores = audio_scores
+        else:  # actual_mode == "motion"
+            scores = motion_scores
+
         if not scores:
-            return {"success": False, "error": "Gagal membaca frame dari video sumber"}
+            return {"success": False, "error": "Tidak ada data skor aktivitas yang dihasilkan"}
 
         if progress_cb:
-            progress_cb(0.56, "Menentukan puncak momen paling seru...")
+            progress_cb(0.58, "Menentukan puncak momen terbaik...")
 
         peaks = find_highlight_peaks(scores, sensitivity=sens, min_gap_sec=gap)
         selected_peaks = sorted(peaks[:limit_clips], key=lambda item: item[0])
 
         if not selected_peaks:
-            return {"success": True, "total": 0, "clips": [], "reel": None, "message": "Tidak ada puncak momen terdeteksi"}
+            return {
+                "success": True,
+                "total": 0,
+                "clips": [],
+                "reel": None,
+                "detection_mode_requested": mode_req,
+                "detection_mode_used": actual_mode,
+                "fallback_applied": fallback_applied,
+                "fallback_reason": fallback_reason,
+                "message": "Tidak ada puncak momen terdeteksi pada video ini",
+            }
 
         duration_probe = probe_duration(video_path, ffprobe)
         video_duration = duration_probe if duration_probe > 0 else float(scores[-1][0] + 1)
@@ -378,7 +591,6 @@ def run_auto_clip(
         _cleanup_old_auto_files(session_folder)
 
         base = os.path.splitext(os.path.basename(video_path))[0]
-        # Hilangkan suffix _skor agar penamaan klip rapi dan konsisten
         clean_base = re.sub(r"_skor$", "", base)
         fmt_tag = "9x16" if fmt == "vertical" else ("1x1" if fmt == "square" else "16x9")
 
@@ -400,7 +612,7 @@ def run_auto_clip(
             out_path = os.path.join(session_folder, out_name)
 
             if progress_cb:
-                pct = 0.58 + (idx / len(selected_peaks)) * 0.32
+                pct = 0.60 + (idx / len(selected_peaks)) * 0.30
                 progress_cb(pct, f"Memotong klip AI {idx+1}/{len(selected_peaks)} ({fmt.upper()})...")
 
             ok = _ffmpeg_cut_auto(
@@ -432,7 +644,6 @@ def run_auto_clip(
             if progress_cb:
                 progress_cb(0.92, "Menggabungkan menjadi Auto Reel Highlight...")
             reel_name = f"{clean_base}_auto_reel_{fmt_tag}.mp4"
-            # Pastikan nama tetap terdeteksi mudah sebagai *_auto_reel.mp4 atau _auto_reel_...mp4
             reel_path = os.path.join(session_folder, reel_name)
             made_reel = concat_clips_to_reel(
                 clip_paths, reel_path, ffmpeg=ffmpeg, working_dir=session_folder, log_prefix="[AutoClipper]"
@@ -443,8 +654,17 @@ def run_auto_clip(
         meta = {
             "generated_at": datetime.now().isoformat(timespec="seconds"),
             "video_source": os.path.basename(video_path),
+            "detection_mode_requested": mode_req,
+            "detection_mode_used": actual_mode,
+            "fallback_applied": fallback_applied,
+            "fallback_reason": fallback_reason,
+            "has_audio": has_audio,
+            "audio_meta": audio_meta,
             "settings": {
+                "detection_mode": mode_req,
                 "sensitivity": sens,
+                "sensitivity_motion": sens_m,
+                "sensitivity_audio": sens_a,
                 "max_clips": limit_clips,
                 "pre_roll_seconds": pre,
                 "post_roll_seconds": post,
@@ -463,7 +683,10 @@ def run_auto_clip(
             json.dump(meta, f, indent=2, ensure_ascii=False)
 
         if progress_cb:
-            progress_cb(1.0, f"Selesai! {len(clips)} klip AI siap.")
+            msg = f"Selesai! {len(clips)} klip AI siap."
+            if fallback_applied:
+                msg += " (Audio hening -> Otomatis beralih ke Gerakan)"
+            progress_cb(1.0, msg)
 
         return {
             "success": True,
@@ -471,6 +694,10 @@ def run_auto_clip(
             "clips": clips,
             "reel": reel_filename,
             "settings": meta["settings"],
+            "detection_mode_requested": mode_req,
+            "detection_mode_used": actual_mode,
+            "fallback_applied": fallback_applied,
+            "fallback_reason": fallback_reason,
             "message": f"Berhasil membuat {len(clips)} Auto-Klip ({fmt.upper()})",
         }
     except Exception as e:

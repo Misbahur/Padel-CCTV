@@ -91,9 +91,15 @@ def get_court_media(court_id: int) -> list:
         auto_meta = get_auto_clip_status(fpath) if AUTO_KLIP_META in files else None
         auto_clip_settings = None
         auto_generated_at = None
+        auto_fallback_applied = False
+        auto_fallback_reason = ""
+        auto_detection_mode_used = ""
         if auto_meta:
             auto_clip_settings = auto_meta.get("settings")
             auto_generated_at = auto_meta.get("generated_at")
+            auto_fallback_applied = bool(auto_meta.get("fallback_applied"))
+            auto_fallback_reason = auto_meta.get("fallback_reason", "")
+            auto_detection_mode_used = auto_meta.get("detection_mode_used", "")
             if auto_meta.get("reel_video") and os.path.isfile(os.path.join(fpath, auto_meta["reel_video"])):
                 auto_reel_vid = auto_meta["reel_video"]
             for ac in auto_meta.get("clips", []):
@@ -150,12 +156,109 @@ def get_court_media(court_id: int) -> list:
             "auto_reel_size_mb": auto_reel_size,
             "auto_clip_settings": auto_clip_settings,
             "auto_clip_generated_at": auto_generated_at,
+            "auto_fallback_applied": auto_fallback_applied,
+            "auto_fallback_reason": auto_fallback_reason,
+            "auto_detection_mode_used": auto_detection_mode_used,
             "share_path": share_path,
             "share_url": share_url,
             "qr_url": qr_url,
         })
 
     return sessions[:20]
+
+
+def get_upload_media() -> list:
+    """Mengambil daftar video dan klip hasil auto-clip yang diunggah secara mandiri."""
+    from backend.config import BASE
+    upload_dir = os.path.normpath(os.path.join(BASE, "rekaman", "uploads"))
+    if not os.path.isdir(upload_dir):
+        return []
+
+    sessions = []
+    try:
+        entries = sorted(os.listdir(upload_dir), reverse=True)
+    except OSError:
+        return []
+
+    for item in entries:
+        fpath = os.path.join(upload_dir, item)
+        if not os.path.isdir(fpath) or item.startswith("_"):
+            continue
+
+        try:
+            files = os.listdir(fpath)
+        except OSError:
+            continue
+
+        main_vid, auto_reel_vid = None, None
+        auto_clips = []
+
+        for f in files:
+            if "_auto_reel" in f and f.endswith(".mp4"):
+                auto_reel_vid = f
+            elif f.endswith(".mp4") and "_auto_klip_" not in f and "_auto_reel" not in f and not main_vid:
+                main_vid = f
+
+        if not main_vid and not auto_clips and not auto_reel_vid:
+            continue
+
+        auto_meta = get_auto_clip_status(fpath) if AUTO_KLIP_META in files else None
+        auto_clip_settings = None
+        auto_generated_at = None
+        auto_fallback_applied = False
+        auto_fallback_reason = ""
+        auto_detection_mode_used = ""
+        if auto_meta:
+            auto_clip_settings = auto_meta.get("settings")
+            auto_generated_at = auto_meta.get("generated_at")
+            auto_fallback_applied = bool(auto_meta.get("fallback_applied"))
+            auto_fallback_reason = auto_meta.get("fallback_reason", "")
+            auto_detection_mode_used = auto_meta.get("detection_mode_used", "")
+            if auto_meta.get("reel_video") and os.path.isfile(os.path.join(fpath, auto_meta["reel_video"])):
+                auto_reel_vid = auto_meta["reel_video"]
+            for ac in auto_meta.get("clips", []):
+                a_file = ac.get("file")
+                if a_file and os.path.isfile(os.path.join(fpath, a_file)):
+                    auto_clips.append({
+                        "file": a_file,
+                        "url": f"/media/uploads/{item}/{a_file}",
+                        "time_str": ac.get("time_str", ""),
+                        "peak_second": ac.get("peak_second", 0),
+                        "duration": ac.get("duration", 0),
+                        "score": ac.get("score", 0),
+                        "format": ac.get("format", "landscape"),
+                        "size_mb": ac.get("size_mb", 0),
+                    })
+
+        main_size = round(os.path.getsize(os.path.join(fpath, main_vid)) / (1024 * 1024), 2) if main_vid else 0
+        auto_reel_size = round(os.path.getsize(os.path.join(fpath, auto_reel_vid)) / (1024 * 1024), 2) if auto_reel_vid else 0
+
+        parts = item.split("_", 2)
+        date_str = parts[0] if len(parts) > 0 else ""
+        time_str = parts[1].replace("-", ":") if len(parts) > 1 else ""
+        label_str = parts[2].replace("-", " ") if len(parts) > 2 else (main_vid or item)
+
+        sessions.append({
+            "folder": item,
+            "title": label_str,
+            "date": f"{date_str} {time_str}".strip(),
+            "main_video": main_vid,
+            "raw_video": main_vid,
+            "skor_video": None,
+            "main_url": f"/media/uploads/{item}/{main_vid}" if main_vid else None,
+            "main_size_mb": main_size,
+            "auto_clips": auto_clips,
+            "auto_reel": auto_reel_vid,
+            "auto_reel_url": f"/media/uploads/{item}/{auto_reel_vid}" if auto_reel_vid else None,
+            "auto_reel_size_mb": auto_reel_size,
+            "auto_clip_settings": auto_clip_settings,
+            "auto_clip_generated_at": auto_generated_at,
+            "auto_fallback_applied": auto_fallback_applied,
+            "auto_fallback_reason": auto_fallback_reason,
+            "auto_detection_mode_used": auto_detection_mode_used,
+        })
+
+    return sessions
 
 
 def serve_file_with_range(handler, fpath: str):
